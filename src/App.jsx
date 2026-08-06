@@ -154,7 +154,7 @@ const EXPENSE_CATS = ["ค่าเช่าคลังสินค้า", "�
 
 /* ============================== SEED DATA ============================== */
 function buildSeedData() {
-  const rand = mulberry32(20260805);
+  return { products: [], customers: [], suppliers: [], orders: [], stockMoves: [], financeEntries: [], categories: [...DEFAULT_CATEGORIES], shopInfo: { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" } };  const rand = mulberry32(20260805);
   const products = [
     { id: "p1", sku: "TS-001", name: "เสื้อยืดคอกลม พิมพ์ลาย", category: "เสื้อผ้า", costPrice: 120, sellPrice: 259, stock: 20, imageUrl: "",
       variants: [{ id: "v1", sku: "TS-001-S", name: "ไซส์ S", sellPrice: 259, stock: 10 }, { id: "v2", sku: "TS-001-M", name: "ไซส์ M", sellPrice: 259, stock: 10 }] },
