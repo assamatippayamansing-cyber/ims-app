@@ -602,27 +602,48 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
 }
 
 /* ============================== STOCK ADJUST MODAL ============================== */
-function StockAdjustModal({ open, onClose, product, moves, onSubmit }) {
+function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }) {
   const [target, setTarget] = useState("");
   const [type, setType] = useState("in");
-  const [qty, setQty] = useState("");
+  const [lots, setLots] = useState([{ id: uid(), supplierId: "", qty: "", costPrice: "" }]);
+  const [outQty, setOutQty] = useState("");
   const [note, setNote] = useState("");
-  useEffect(() => { if (open) { setTarget(""); setType("in"); setQty(""); setNote(""); } }, [open, product]);
+
+  useEffect(() => {
+    if (open) {
+      setTarget(""); setType("in");
+      setLots([{ id: uid(), supplierId: "", qty: "", costPrice: "" }]);
+      setOutQty(""); setNote("");
+    }
+  }, [open, product]);
+
   if (!product) return null;
   const options = [{ id: "", label: `${product.name} (สินค้าหลัก) — คงเหลือ ${product.stock}` },
     ...(product.variants || []).map((v) => ({ id: v.id, label: `${v.name} (${v.sku}) — คงเหลือ ${v.stock}` }))];
 
+  const addLotRow = () => setLots((l) => [...l, { id: uid(), supplierId: "", qty: "", costPrice: "" }]);
+  const updateLot = (id, k, v) => setLots((l) => l.map((x) => x.id === id ? { ...x, [k]: v } : x));
+  const removeLot = (id) => setLots((l) => l.filter((x) => x.id !== id));
+
   const submit = () => {
-    if (!qty || Number(qty) <= 0) { alert("กรุณาระบุจำนวนให้ถูกต้อง"); return; }
-    onSubmit({ productId: product.id, variantId: target || null, type, qty: Number(qty), note });
-    setQty(""); setNote("");
+    if (type === "in") {
+      const cleanLots = lots.filter((l) => l.qty && Number(l.qty) > 0).map((l) => ({
+        supplierId: l.supplierId || null, qty: Number(l.qty), costPrice: l.costPrice === "" ? null : Number(l.costPrice),
+      }));
+      if (cleanLots.length === 0) { alert("กรุณาระบุจำนวนอย่างน้อย 1 รายการ"); return; }
+      onSubmit({ productId: product.id, variantId: target || null, type: "in", lots: cleanLots, note });
+    } else {
+      if (!outQty || Number(outQty) <= 0) { alert("กรุณาระบุจำนวนให้ถูกต้อง"); return; }
+      onSubmit({ productId: product.id, variantId: target || null, type: "out", qty: Number(outQty), note });
+    }
   };
 
   const productMoves = moves.filter((m) => m.productId === product.id).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 40);
   const labelFor = (m) => m.variantId ? (product.variants || []).find((v) => v.id === m.variantId)?.name || "ตัวเลือกย่อย" : "สินค้าหลัก";
+  const supplierName = (id) => suppliers.find((s) => s.id === id)?.name;
 
   return (
-    <Modal open={open} onClose={onClose} title={`จัดการสต๊อก — ${product.name}`} width={560}>
+    <Modal open={open} onClose={onClose} title={`จัดการสต๊อก — ${product.name}`} width={620}>
       <div className="flex items-center gap-3 mb-4">
         <Thumb src={product.imageUrl} size={48} />
         <div>
@@ -647,10 +668,33 @@ function StockAdjustModal({ open, onClose, product, moves, onSubmit }) {
           </button>
         </div>
       </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="จำนวน" required><Input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
-        <Field label="หมายเหตุ"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น รับจากผู้จำหน่าย" /></Field>
-      </div>
+
+      {type === "in" ? (
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-semibold" style={{ color: C.sub }}>รายการรับเข้า (เพิ่มได้หลายรายการ ต่างผู้จำหน่าย/ต้นทุนกันได้)</span>
+            <Btn variant="subtle" icon={Plus} onClick={addLotRow}>เพิ่มรายการ</Btn>
+          </div>
+          <div className="flex flex-col gap-2">
+            {lots.map((l) => (
+              <div key={l.id} className="grid gap-2 items-center p-2 rounded-xl" style={{ gridTemplateColumns: "1fr 90px 110px auto", background: C.bg }}>
+                <Select value={l.supplierId} onChange={(e) => updateLot(l.id, "supplierId", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }}>
+                  <option value="">ไม่ระบุผู้จำหน่าย</option>
+                  {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </Select>
+                <Input type="number" min="0" placeholder="จำนวน" value={l.qty} onChange={(e) => updateLot(l.id, "qty", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
+                <Input type="number" min="0" placeholder="ต้นทุน/หน่วย" value={l.costPrice} onChange={(e) => updateLot(l.id, "costPrice", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
+                <IconBtn icon={X} tone="danger" title="ลบรายการ" onClick={() => removeLot(l.id)} />
+              </div>
+            ))}
+          </div>
+          <div className="text-xs mt-1.5" style={{ color: C.faint }}>เว้นว่างช่องต้นทุนได้ถ้าต้นทุนเท่าเดิม ระบบจะคำนวณต้นทุนเฉลี่ยใหม่ให้อัตโนมัติ</div>
+        </div>
+      ) : (
+        <Field label="จำนวน" required><Input type="number" min="1" value={outQty} onChange={(e) => setOutQty(e.target.value)} /></Field>
+      )}
+
+      <Field label="หมายเหตุ"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น เลขที่เอกสาร" /></Field>
       <Btn className="w-full justify-center mb-4" onClick={submit}>บันทึกรายการสต๊อก</Btn>
 
       <div className="pt-3" style={{ borderTop: `1px dashed ${C.border}` }}>
@@ -661,6 +705,8 @@ function StockAdjustModal({ open, onClose, product, moves, onSubmit }) {
               <div>
                 <span className="font-semibold" style={{ color: C.text }}>{labelFor(m)}</span>
                 <span style={{ color: C.faint }}> · {fmtDateTime(m.date)}</span>
+                {m.supplierId && <div style={{ color: C.sub }}>ผู้จำหน่าย: {supplierName(m.supplierId) || "-"}</div>}
+                {m.costPrice != null && <div style={{ color: C.sub }}>ต้นทุน/หน่วย: {money(m.costPrice)}</div>}
                 {m.note && <div style={{ color: C.sub }}>{m.note}</div>}
               </div>
               <span className="mono font-bold" style={{ color: m.type === "in" ? C.success : C.danger }}>{m.type === "in" ? "+" : "-"}{num(m.qty)}</span>
@@ -669,144 +715,6 @@ function StockAdjustModal({ open, onClose, product, moves, onSubmit }) {
         </div>
       </div>
     </Modal>
-  );
-}
-
-/* ============================== RECEIPT / QUOTATION (A4 print) ============================== */
-function DocRow({ label, value, bold }) {
-  if (!value) return null;
-  return <div className="flex gap-2 text-sm"><span style={{ color: C.sub, minWidth: 92 }}>{label}</span><span className={bold ? "font-bold" : ""}>{value}</span></div>;
-}
-
-function ReceiptView({ open, onClose, order, customer, shopInfo }) {
-  const [docType, setDocType] = useState("receipt");
-  const [includeVat, setIncludeVat] = useState(false);
-  useEffect(() => { if (open) { setDocType("receipt"); setIncludeVat(false); } }, [open, order]);
-  if (!open || !order) return null;
-
-  const isQuote = docType === "quotation";
-  const t = orderTotals(order);
-  const preVat = t.subtotal + (order.shippingFee || 0);
-  const vat = includeVat ? Math.round(preVat * 0.07 * 100) / 100 : 0;
-  const grandTotal = preVat + vat - (order.discount || 0);
-
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: "rgba(11,30,63,0.55)" }}>
-      <div className="min-h-full flex flex-col items-center py-6 px-3">
-        <div className="flex flex-wrap gap-2 mb-4 no-print sticky top-2 z-10 justify-center">
-          <div className="flex rounded-xl overflow-hidden" style={{ border: `1px solid ${C.border}`, background: "#fff" }}>
-            <button onClick={() => setDocType("receipt")} className="px-3.5 py-2 text-xs font-semibold" style={{ background: !isQuote ? C.accent : "#fff", color: !isQuote ? "#fff" : C.sub }}>ใบเสร็จรับเงิน</button>
-            <button onClick={() => setDocType("quotation")} className="px-3.5 py-2 text-xs font-semibold" style={{ background: isQuote ? C.accent : "#fff", color: isQuote ? "#fff" : C.sub }}>ใบเสนอราคา</button>
-          </div>
-          <button onClick={() => setIncludeVat((v) => !v)} className="px-3.5 py-2 rounded-xl text-xs font-semibold" style={{ background: includeVat ? C.accentSoft : "#fff", color: includeVat ? C.accentDark : C.sub, border: `1px solid ${C.border}` }}>
-            {includeVat ? "✓ " : ""}รวมภาษีมูลค่าเพิ่ม 7%
-          </button>
-          <Btn variant="ghost" onClick={onClose}>ปิดหน้าต่าง</Btn>
-          <Btn icon={Printer} onClick={() => window.print()}>พิมพ์ (A4)</Btn>
-        </div>
-
-        <div className="printable" style={{ width: "210mm", maxWidth: "100%", background: "#fff", padding: "14mm", color: C.text, boxShadow: "0 10px 34px rgba(11,30,63,0.18)", borderRadius: 4 }}>
-          <div className="mb-5">
-            <div className="text-3xl font-extrabold leading-tight">{isQuote ? "ใบเสนอราคา" : "ใบเสร็จรับเงิน"}</div>
-            <div className="text-lg font-bold" style={{ color: C.sub }}>{isQuote ? "Quotation" : "Receipt"}</div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-6 py-4 text-sm" style={{ borderTop: `1px solid ${C.text}`, borderBottom: `1px solid ${C.text}` }}>
-            <div className="flex flex-col gap-1">
-              <DocRow label="ชื่อลูกค้า" value={customer?.name || "ลูกค้าทั่วไป"} bold />
-              <DocRow label="ที่อยู่" value={customer?.address} />
-              <DocRow label="เลขผู้เสียภาษี" value={customer?.taxId} />
-              <DocRow label="อีเมล" value={customer?.email} />
-              <DocRow label="เบอร์โทรศัพท์" value={customer?.phone} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <div className="flex gap-2 text-sm"><span style={{ color: C.sub, minWidth: 92 }}>เลขที่</span><span className="font-bold mono">{order.orderNo}</span></div>
-              <DocRow label="วันที่" value={fmtDate(order.date)} />
-              <DocRow label={isQuote ? "ยืนราคาถึง" : "ครบกำหนด"} value={fmtDate(addDays(order.date, isQuote ? 7 : 30))} />
-              <DocRow label="อ้างอิง" value={channelOf(order.channel)?.label} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-6 py-4 text-sm" style={{ borderBottom: `1px solid ${C.border}` }}>
-            <div className="flex flex-col gap-1">
-              <DocRow label="ผู้ออก" value={shopInfo?.name || "ยังไม่ได้ตั้งค่าชื่อร้าน"} bold />
-              <DocRow label="ที่อยู่" value={shopInfo?.address} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <DocRow label="เลขผู้เสียภาษี" value={shopInfo?.taxId} />
-              <DocRow label="เบอร์โทร" value={shopInfo?.phone} />
-              <DocRow label="อีเมล" value={shopInfo?.email} />
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-lg overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
-            <table className="w-full text-sm">
-              <thead><tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
-                <th className="text-left py-2.5 px-3" style={{ color: C.sub }}>ลำดับ</th>
-                <th className="text-left py-2.5 px-3" style={{ color: C.sub }}>รายการสินค้า</th>
-                <th className="text-right py-2.5 px-3" style={{ color: C.sub }}>จำนวน</th>
-                <th className="text-right py-2.5 px-3" style={{ color: C.sub }}>ราคา/หน่วย</th>
-                <th className="text-right py-2.5 px-3" style={{ color: C.sub }}>ราคารวม</th>
-              </tr></thead>
-              <tbody>
-                {order.items.map((it, i) => (
-                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                    <td className="py-2 px-3">{i + 1}</td><td className="py-2 px-3">{it.name}</td>
-                    <td className="py-2 px-3 text-right mono">{it.qty}</td><td className="py-2 px-3 text-right mono">{money(it.price)}</td>
-                    <td className="py-2 px-3 text-right mono">{money(it.qty * it.price)}</td>
-                  </tr>
-                ))}
-                {Array.from({ length: Math.max(0, 4 - order.items.length) }).map((_, i) => (
-                  <tr key={"blank" + i} style={{ borderBottom: `1px solid ${C.border}` }}><td className="py-2.5 px-3" colSpan={5}>&nbsp;</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="grid grid-cols-2 gap-6 mt-4">
-            <div>
-              <div className="text-xs font-semibold mb-1.5" style={{ color: C.sub }}>หมายเหตุ</div>
-              <div className="rounded-lg h-24" style={{ border: `1px solid ${C.border}` }} />
-            </div>
-            <div className="flex flex-col gap-1.5 text-sm justify-end">
-              <div className="flex justify-between"><span>ราคารวม</span><span className="mono">{money(preVat)}</span></div>
-              {includeVat && <div className="flex justify-between"><span>ภาษีมูลค่าเพิ่ม (7%)</span><span className="mono">{money(vat)}</span></div>}
-              <div className="flex justify-between"><span>ส่วนลด</span><span className="mono">{money(order.discount)}</span></div>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center mt-4 px-4 py-3 rounded-lg" style={{ border: `1px solid ${C.text}` }}>
-            <div className="font-bold">จำนวนเงินรวมทั้งสิ้น</div>
-            <div className="text-right">
-              <div className="font-extrabold text-lg mono">{money(grandTotal)}</div>
-              <div className="text-xs" style={{ color: C.sub }}>({thaiBahtText(grandTotal)})</div>
-            </div>
-          </div>
-
-          {!isQuote && (
-            <div className="grid grid-cols-2 gap-6 mt-6 text-sm">
-              <div>
-                <div className="font-bold mb-2">การชำระเงิน</div>
-                <div className="flex flex-col gap-1.5" style={{ color: C.sub }}>
-                  <div className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded-full inline-block" style={{ border: `1.5px solid ${C.sub}` }} /> เงินสด</div>
-                  <div className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded-full inline-block" style={{ border: `1.5px solid ${C.sub}` }} /> บัตรเดบิต / บัตรเครดิต</div>
-                  <div className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded-full inline-block" style={{ border: `1.5px solid ${C.sub}` }} /> โอนผ่านบัญชี</div>
-                </div>
-              </div>
-              <div>
-                <div className="font-bold mb-2">หมายเหตุ</div>
-                <div className="rounded-lg h-16" style={{ border: `1px solid ${C.border}` }} />
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-10 text-xs text-center mt-16" style={{ color: C.sub }}>
-            <div>............................................<div className="mt-1">{isQuote ? "ผู้เสนอราคา" : "อนุมัติโดย"}</div><div className="mt-1">วันที่ ....................</div></div>
-            <div>............................................<div className="mt-1">{isQuote ? "ผู้อนุมัติสั่งซื้อ" : "รับชำระ"}</div><div className="mt-1">วันที่ ....................</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1163,7 +1071,7 @@ function ProductsPage({ data, actions }) {
 
       <ProductModal open={!!modal} onClose={() => setModal(null)} initial={modal} categories={data.categories} onAddCategory={actions.addCategory}
         onSave={(payload) => { if (modal && modal.id) actions.editProduct({ ...modal, ...payload }); else actions.addProduct({ id: uid(), ...payload }); setModal(null); }} />
-      <StockAdjustModal open={!!stockTarget} onClose={() => setStockTarget(null)} product={stockTarget} moves={data.stockMoves} onSubmit={actions.addStockMove} />
+      <StockAdjustModal open={!!stockTarget} onClose={() => setStockTarget(null)} product={stockTarget} moves={data.stockMoves} suppliers={data.suppliers} onSubmit={actions.addStockMove} />
       <ConfirmDialog open={!!del} onCancel={() => setDel(null)} message={`ต้องการลบ "${del?.name || ""}" ใช่หรือไม่? (รวมสินค้าย่อยทั้งหมด)`}
         onConfirm={() => { actions.deleteProduct(del.id); setDel(null); }} />
     </div>
@@ -1764,16 +1672,39 @@ export default function App() {
     editSupplier: (s) => setData((d) => ({ ...d, suppliers: d.suppliers.map((x) => x.id === s.id ? { ...x, ...s } : x) })),
     deleteSupplier: (id) => setData((d) => ({ ...d, suppliers: d.suppliers.filter((x) => x.id !== id) })),
     addStockMove: (m) => setData((d) => {
-      const move = { id: uid(), date: new Date().toISOString(), refOrderId: null, ...m };
-      const products = d.products.map((p) => {
-        if (p.id !== m.productId) return p;
-        if (m.variantId) {
-          const variants = (p.variants || []).map((v) => v.id === m.variantId ? { ...v, stock: m.type === "in" ? v.stock + m.qty : Math.max(0, v.stock - m.qty) } : v);
-          return { ...p, variants };
-        }
-        return { ...p, stock: m.type === "in" ? p.stock + m.qty : Math.max(0, p.stock - m.qty) };
-      });
-      return { ...d, products, stockMoves: [...d.stockMoves, move] };
+      const moves = [];
+      let products = d.products;
+      if (m.type === "in" && m.lots) {
+        const totalNewQty = m.lots.reduce((s, l) => s + l.qty, 0);
+        const totalKnownValue = m.lots.filter((l) => l.costPrice != null).reduce((s, l) => s + l.qty * l.costPrice, 0);
+        const unknownCostQty = m.lots.filter((l) => l.costPrice == null).reduce((s, l) => s + l.qty, 0);
+        products = products.map((p) => {
+          if (p.id !== m.productId) return p;
+          const currentTotalStock = productTotalStock(p);
+          const currentTotalValue = currentTotalStock * p.costPrice;
+          const newTotalStock = currentTotalStock + totalNewQty;
+          const newTotalValue = currentTotalValue + totalKnownValue + unknownCostQty * p.costPrice;
+          const newCostPrice = newTotalStock > 0 ? Math.round((newTotalValue / newTotalStock) * 100) / 100 : p.costPrice;
+          let np = { ...p, costPrice: newCostPrice, variants: (p.variants || []).map((v) => ({ ...v })) };
+          if (m.variantId) np.variants = np.variants.map((v) => v.id === m.variantId ? { ...v, stock: v.stock + totalNewQty } : v);
+          else np.stock = np.stock + totalNewQty;
+          return np;
+        });
+        m.lots.forEach((l) => {
+          moves.push({ id: uid(), productId: m.productId, variantId: m.variantId || null, type: "in", qty: l.qty, costPrice: l.costPrice, supplierId: l.supplierId, date: new Date().toISOString(), note: m.note || "", refOrderId: null });
+        });
+      } else {
+        products = products.map((p) => {
+          if (p.id !== m.productId) return p;
+          if (m.variantId) {
+            const variants = (p.variants || []).map((v) => v.id === m.variantId ? { ...v, stock: Math.max(0, v.stock - m.qty) } : v);
+            return { ...p, variants };
+          }
+          return { ...p, stock: Math.max(0, p.stock - m.qty) };
+        });
+        moves.push({ id: uid(), productId: m.productId, variantId: m.variantId || null, type: "out", qty: m.qty, date: new Date().toISOString(), note: m.note || "", refOrderId: null });
+      }
+      return { ...d, products, stockMoves: [...d.stockMoves, ...moves] };
     }),
     addOrder: (o) => setData((d) => {
       const order = { id: uid(), ...o };
