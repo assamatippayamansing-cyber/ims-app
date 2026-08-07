@@ -719,6 +719,143 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
 }
 
 /* ============================== SHOP SETTINGS MODAL ============================== */
+/* ============================== RECEIPT / QUOTATION (A4 print) ============================== */
+function DocRow({ label, value, bold }) {
+  if (!value) return null;
+  return <div className="flex gap-2 text-sm"><span style={{ color: C.sub, minWidth: 92 }}>{label}</span><span className={bold ? "font-bold" : ""}>{value}</span></div>;
+}
+
+function ReceiptView({ open, onClose, order, customer, shopInfo }) {
+  const [docType, setDocType] = useState("receipt");
+  const [includeVat, setIncludeVat] = useState(false);
+  useEffect(() => { if (open) { setDocType("receipt"); setIncludeVat(false); } }, [open, order]);
+  if (!open || !order) return null;
+
+  const isQuote = docType === "quotation";
+  const t = orderTotals(order);
+  const preVat = t.subtotal + (order.shippingFee || 0);
+  const vat = includeVat ? Math.round(preVat * 0.07 * 100) / 100 : 0;
+  const grandTotal = preVat + vat - (order.discount || 0);
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: "rgba(11,30,63,0.55)" }}>
+      <div className="min-h-full flex flex-col items-center py-6 px-3">
+        <div className="flex flex-wrap gap-2 mb-4 no-print sticky top-2 z-10 justify-center">
+          <div className="flex rounded-xl overflow-hidden" style={{ border: `1px solid ${C.border}`, background: "#fff" }}>
+            <button onClick={() => setDocType("receipt")} className="px-3.5 py-2 text-xs font-semibold" style={{ background: !isQuote ? C.accent : "#fff", color: !isQuote ? "#fff" : C.sub }}>ใบเสร็จรับเงิน</button>
+            <button onClick={() => setDocType("quotation")} className="px-3.5 py-2 text-xs font-semibold" style={{ background: isQuote ? C.accent : "#fff", color: isQuote ? "#fff" : C.sub }}>ใบเสนอราคา</button>
+          </div>
+          <button onClick={() => setIncludeVat((v) => !v)} className="px-3.5 py-2 rounded-xl text-xs font-semibold" style={{ background: includeVat ? C.accentSoft : "#fff", color: includeVat ? C.accentDark : C.sub, border: `1px solid ${C.border}` }}>
+            {includeVat ? "✓ " : ""}รวมภาษีมูลค่าเพิ่ม 7%
+          </button>
+          <Btn variant="ghost" onClick={onClose}>ปิดหน้าต่าง</Btn>
+          <Btn icon={Printer} onClick={() => window.print()}>พิมพ์ (A4)</Btn>
+        </div>
+
+        <div className="printable" style={{ width: "210mm", maxWidth: "100%", background: "#fff", padding: "14mm", color: C.text, boxShadow: "0 10px 34px rgba(11,30,63,0.18)", borderRadius: 4 }}>
+          <div className="mb-5">
+            <div className="text-3xl font-extrabold leading-tight">{isQuote ? "ใบเสนอราคา" : "ใบเสร็จรับเงิน"}</div>
+            <div className="text-lg font-bold" style={{ color: C.sub }}>{isQuote ? "Quotation" : "Receipt"}</div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-6 py-4 text-sm" style={{ borderTop: `1px solid ${C.text}`, borderBottom: `1px solid ${C.text}` }}>
+            <div className="flex flex-col gap-1">
+              <DocRow label="ชื่อลูกค้า" value={customer?.name || "ลูกค้าทั่วไป"} bold />
+              <DocRow label="ที่อยู่" value={customer?.address} />
+              <DocRow label="เลขผู้เสียภาษี" value={customer?.taxId} />
+              <DocRow label="อีเมล" value={customer?.email} />
+              <DocRow label="เบอร์โทรศัพท์" value={customer?.phone} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex gap-2 text-sm"><span style={{ color: C.sub, minWidth: 92 }}>เลขที่</span><span className="font-bold mono">{order.orderNo}</span></div>
+              <DocRow label="วันที่" value={fmtDate(order.date)} />
+              <DocRow label={isQuote ? "ยืนราคาถึง" : "ครบกำหนด"} value={fmtDate(addDays(order.date, isQuote ? 7 : 30))} />
+              <DocRow label="อ้างอิง" value={channelOf(order.channel)?.label} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-6 py-4 text-sm" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div className="flex flex-col gap-1">
+              <DocRow label="ผู้ออก" value={shopInfo?.name || "ยังไม่ได้ตั้งค่าชื่อร้าน"} bold />
+              <DocRow label="ที่อยู่" value={shopInfo?.address} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <DocRow label="เลขผู้เสียภาษี" value={shopInfo?.taxId} />
+              <DocRow label="เบอร์โทร" value={shopInfo?.phone} />
+              <DocRow label="อีเมล" value={shopInfo?.email} />
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-lg overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
+            <table className="w-full text-sm">
+              <thead><tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                <th className="text-left py-2.5 px-3" style={{ color: C.sub }}>ลำดับ</th>
+                <th className="text-left py-2.5 px-3" style={{ color: C.sub }}>รายการสินค้า</th>
+                <th className="text-right py-2.5 px-3" style={{ color: C.sub }}>จำนวน</th>
+                <th className="text-right py-2.5 px-3" style={{ color: C.sub }}>ราคา/หน่วย</th>
+                <th className="text-right py-2.5 px-3" style={{ color: C.sub }}>ราคารวม</th>
+              </tr></thead>
+              <tbody>
+                {order.items.map((it, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td className="py-2 px-3">{i + 1}</td><td className="py-2 px-3">{it.name}</td>
+                    <td className="py-2 px-3 text-right mono">{it.qty}</td><td className="py-2 px-3 text-right mono">{money(it.price)}</td>
+                    <td className="py-2 px-3 text-right mono">{money(it.qty * it.price)}</td>
+                  </tr>
+                ))}
+                {Array.from({ length: Math.max(0, 4 - order.items.length) }).map((_, i) => (
+                  <tr key={"blank" + i} style={{ borderBottom: `1px solid ${C.border}` }}><td className="py-2.5 px-3" colSpan={5}>&nbsp;</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="grid grid-cols-2 gap-6 mt-4">
+            <div>
+              <div className="text-xs font-semibold mb-1.5" style={{ color: C.sub }}>หมายเหตุ</div>
+              <div className="rounded-lg h-24" style={{ border: `1px solid ${C.border}` }} />
+            </div>
+            <div className="flex flex-col gap-1.5 text-sm justify-end">
+              <div className="flex justify-between"><span>ราคารวม</span><span className="mono">{money(preVat)}</span></div>
+              {includeVat && <div className="flex justify-between"><span>ภาษีมูลค่าเพิ่ม (7%)</span><span className="mono">{money(vat)}</span></div>}
+              <div className="flex justify-between"><span>ส่วนลด</span><span className="mono">{money(order.discount)}</span></div>
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center mt-4 px-4 py-3 rounded-lg" style={{ border: `1px solid ${C.text}` }}>
+            <div className="font-bold">จำนวนเงินรวมทั้งสิ้น</div>
+            <div className="text-right">
+              <div className="font-extrabold text-lg mono">{money(grandTotal)}</div>
+              <div className="text-xs" style={{ color: C.sub }}>({thaiBahtText(grandTotal)})</div>
+            </div>
+          </div>
+
+          {!isQuote && (
+            <div className="grid grid-cols-2 gap-6 mt-6 text-sm">
+              <div>
+                <div className="font-bold mb-2">การชำระเงิน</div>
+                <div className="flex flex-col gap-1.5" style={{ color: C.sub }}>
+                  <div className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded-full inline-block" style={{ border: `1.5px solid ${C.sub}` }} /> เงินสด</div>
+                  <div className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded-full inline-block" style={{ border: `1.5px solid ${C.sub}` }} /> บัตรเดบิต / บัตรเครดิต</div>
+                  <div className="flex items-center gap-2"><span className="w-3.5 h-3.5 rounded-full inline-block" style={{ border: `1.5px solid ${C.sub}` }} /> โอนผ่านบัญชี</div>
+                </div>
+              </div>
+              <div>
+                <div className="font-bold mb-2">หมายเหตุ</div>
+                <div className="rounded-lg h-16" style={{ border: `1px solid ${C.border}` }} />
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-10 text-xs text-center mt-16" style={{ color: C.sub }}>
+            <div>............................................<div className="mt-1">{isQuote ? "ผู้เสนอราคา" : "อนุมัติโดย"}</div><div className="mt-1">วันที่ ....................</div></div>
+            <div>............................................<div className="mt-1">{isQuote ? "ผู้อนุมัติสั่งซื้อ" : "รับชำระ"}</div><div className="mt-1">วันที่ ....................</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 function ShopSettingsModal({ open, onClose, shopInfo, onSave }) {
   const [form, setForm] = useState(shopInfo || {});
   useEffect(() => { setForm(shopInfo || {}); }, [shopInfo, open]);
