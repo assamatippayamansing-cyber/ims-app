@@ -1704,35 +1704,23 @@ function ReportsPage({ data }) {
 
 /* ============================== APP ROOT ============================== */
 const STORAGE_KEY = "ims-app-data";
-const SITE_PASSWORD = "2121"; // เปลี่ยนเป็นรหัสที่ต้องการ
+const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 export default function App() {
-  const [page, setPage] = useState("order");const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("ims-unlocked") === "1");
+  const [page, setPage] = useState("orders");
+  const [navOpen, setNavOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const saveTimer = useRef(null);
+
+  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("ims-unlocked") === "1");
   const [pwInput, setPwInput] = useState("");
   const [pwError, setPwError] = useState(false);
   const tryUnlock = () => {
     if (pwInput === SITE_PASSWORD) { sessionStorage.setItem("ims-unlocked", "1"); setUnlocked(true); }
     else setPwError(true);
   };
-  if (!unlocked) {
-    return (
-      <div className="ims min-h-screen flex items-center justify-center p-4" style={{ background: "#0B1E3F" }}>
-        <div className="w-full max-w-sm p-6 rounded-2xl" style={{ background: "#fff" }}>
-          <div className="text-lg font-bold mb-3">กรุณาใส่รหัสผ่าน</div>
-          <input type="password" value={pwInput} onChange={(e) => { setPwInput(e.target.value); setPwError(false); }}
-            onKeyDown={(e) => { if (e.key === "Enter") tryUnlock(); }}
-            style={{ width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #DEE6F3", fontSize: 14 }} />
-          {pwError && <div className="text-xs mt-2" style={{ color: "#C0402B" }}>รหัสผ่านไม่ถูกต้อง</div>}
-          <button onClick={tryUnlock} className="w-full mt-3 py-2 rounded-xl font-semibold" style={{ background: "#1D4FC4", color: "#fff" }}>เข้าสู่ระบบ</button>
-        </div>
-      </div>
-    );
-  }
-  const [navOpen, setNavOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const saveTimer = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -1760,7 +1748,7 @@ export default function App() {
   }, [data]);
 
   const resetData = async () => {
-    if (!confirm("ต้องการรีเซ็ตข้อมูลทั้งหมดกลับเป็นข้อมูลตัวอย่างหรือไม่?")) return;
+    if (!confirm("ต้องการล้างข้อมูลทั้งหมดหรือไม่? (ไม่สามารถกู้คืนได้)")) return;
     setData(buildSeedData());
   };
 
@@ -1810,7 +1798,30 @@ export default function App() {
     updateShopInfo: (info) => setData((d) => ({ ...d, shopInfo: { ...d.shopInfo, ...info } })),
   };
 
+  if (!unlocked) {
+    return (
+      <div className="ims min-h-screen flex items-center justify-center p-4" style={{ background: "#0B1E3F" }}>
+        <GlobalStyle />
+        <div className="w-full max-w-sm p-6 rounded-2xl" style={{ background: "#fff" }}>
+          <div className="text-lg font-bold mb-3">กรุณาใส่รหัสผ่าน</div>
+          <input type="password" value={pwInput} onChange={(e) => { setPwInput(e.target.value); setPwError(false); }}
+            onKeyDown={(e) => { if (e.key === "Enter") tryUnlock(); }}
+            style={{ width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #DEE6F3", fontSize: 14 }} />
+          {pwError && <div className="text-xs mt-2" style={{ color: "#C0402B" }}>รหัสผ่านไม่ถูกต้อง</div>}
+          <button onClick={tryUnlock} className="w-full mt-3 py-2 rounded-xl font-semibold" style={{ background: "#1D4FC4", color: "#fff" }}>เข้าสู่ระบบ</button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading || !data) {
+    return (
+      <div className="ims min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+        <GlobalStyle />
+        <div className="text-sm" style={{ color: C.sub }}>กำลังโหลดข้อมูล...</div>
+      </div>
+    );
+  }
     return (
       <div className="ims min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
         <GlobalStyle />
