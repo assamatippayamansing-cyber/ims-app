@@ -13,7 +13,7 @@ export default {
         const body = await request.text();
         await env.IMS_KV.put("ims-app-data", body);
         return new Response(JSON.stringify({ ok: true }), {
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json; charset=utf-8" },
         });
       }
       return new Response("Method not allowed", { status: 405 });
