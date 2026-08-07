@@ -63,6 +63,9 @@ const fmtDate = (d) => new Date(d).toLocaleDateString("th-TH", { day: "2-digit",
 const fmtDateTime = (d) => new Date(d).toLocaleString("th-TH", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
 const MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
+
+const SITE_PASSWORD = "1234"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 const CHANNELS = [
   { key: "line", label: "LINE", color: "#06C755" },
@@ -73,8 +76,6 @@ const CHANNELS = [
   { key: "other", label: "อื่นๆ / หน้าร้าน", color: "#6B7280" },
 ];
 const channelOf = (key) => CHANNELS.find((c) => c.key === key);
-
-const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
 // Thai baht text conversion (e.g. 9630 -> "เก้าพันหกร้อยสามสิบบาทถ้วน")
 function thaiBahtText(amount) {
@@ -152,104 +153,59 @@ function resizeImageFile(file, maxDim = 480, quality = 0.82) {
 const DEFAULT_CATEGORIES = ["เสื้อผ้า", "กระเป๋า", "อิเล็กทรอนิกส์", "ของใช้ทั่วไป"];
 const EXPENSE_CATS = ["ค่าเช่าคลังสินค้า", "ค่าการตลาด/โฆษณา", "ค่าขนส่ง", "เงินเดือนพนักงาน", "ค่าสาธารณูปโภค", "อื่นๆ"];
 
+/* ============================== FIFO LOT HELPERS ============================== */
+// Every product has: { ...basicFields, costPrice (estimate/default only), variants: [{id,sku,name,sellPrice}], lots: [{id,variantId,qty,costPrice,supplierId,date,note}] }
+const productLots = (p) => p.lots || [];
+const lotsFor = (p, variantId) => productLots(p).filter((l) => (l.variantId || null) === (variantId || null) && l.qty > 0)
+  .sort((a, b) => new Date(a.date) - new Date(b.date));
+const stockOf = (p, variantId) => productLots(p).filter((l) => (l.variantId || null) === (variantId || null)).reduce((s, l) => s + l.qty, 0);
+const avgCostOf = (p, variantId) => {
+  const lots = lotsFor(p, variantId);
+  const totalQty = lots.reduce((s, l) => s + l.qty, 0);
+  if (totalQty === 0) return p.costPrice || 0;
+  const totalVal = lots.reduce((s, l) => s + l.qty * l.costPrice, 0);
+  return Math.round((totalVal / totalQty) * 100) / 100;
+};
+const productTotalStock = (p) => productLots(p).reduce((s, l) => s + l.qty, 0);
+const productStockValue = (p) => productLots(p).reduce((s, l) => s + l.qty * l.costPrice, 0);
+
+// Consumes `qty` units FIFO (oldest lot first) from a product's lots for a given variant.
+// Returns { lots: newLotsArray, cost: totalCostConsumed, shortfall: unfulfilledQty }
+function deductFIFO(allLots, variantId, qty) {
+  const key = variantId || null;
+  const relevant = allLots
+    .map((l, idx) => ({ ...l, _idx: idx }))
+    .filter((l) => (l.variantId || null) === key && l.qty > 0)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  let remaining = qty;
+  let cost = 0;
+  const updates = {};
+  for (const lot of relevant) {
+    if (remaining <= 0) break;
+    const take = Math.min(lot.qty, remaining);
+    cost += take * lot.costPrice;
+    updates[lot._idx] = lot.qty - take;
+    remaining -= take;
+  }
+  const newLots = allLots.map((l, idx) => (updates.hasOwnProperty(idx) ? { ...l, qty: updates[idx] } : l));
+  return { lots: newLots, cost, shortfall: remaining };
+}
+
+// Backward-compat: migrate old flat stock/costPrice products (or fresh empty ones) into the lots model
+function migrateProduct(p) {
+  if (p.lots) return { ...p, variants: (p.variants || []).map((v) => ({ id: v.id, sku: v.sku, name: v.name, sellPrice: v.sellPrice })) };
+  const lots = [];
+  const now = new Date().toISOString();
+  if (p.stock > 0) lots.push({ id: uid(), variantId: null, qty: p.stock, costPrice: p.costPrice || 0, supplierId: null, date: now, note: "ย้ายข้อมูลจากระบบเดิม" });
+  (p.variants || []).forEach((v) => {
+    if (v.stock > 0) lots.push({ id: uid(), variantId: v.id, qty: v.stock, costPrice: p.costPrice || 0, supplierId: null, date: now, note: "ย้ายข้อมูลจากระบบเดิม" });
+  });
+  return { ...p, lots, variants: (p.variants || []).map((v) => ({ id: v.id, sku: v.sku, name: v.name, sellPrice: v.sellPrice })) };
+}
+
 /* ============================== SEED DATA ============================== */
 function buildSeedData() {
-  return { products: [], customers: [], suppliers: [], orders: [], stockMoves: [], financeEntries: [], categories: [...DEFAULT_CATEGORIES], shopInfo: { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" } };  const rand = mulberry32(20260805);
-  const products = [
-    { id: "p1", sku: "TS-001", name: "เสื้อยืดคอกลม พิมพ์ลาย", category: "เสื้อผ้า", costPrice: 120, sellPrice: 259, stock: 20, imageUrl: "",
-      variants: [{ id: "v1", sku: "TS-001-S", name: "ไซส์ S", sellPrice: 259, stock: 10 }, { id: "v2", sku: "TS-001-M", name: "ไซส์ M", sellPrice: 259, stock: 10 }] },
-    { id: "p2", sku: "BG-002", name: "กระเป๋าผ้าแคนวาส", category: "กระเป๋า", costPrice: 85, sellPrice: 199, stock: 55, imageUrl: "", variants: [] },
-    { id: "p3", sku: "BT-003", name: "ขวดน้ำสแตนเลสเก็บความเย็น", category: "ของใช้ทั่วไป", costPrice: 150, sellPrice: 320, stock: 30, imageUrl: "", variants: [] },
-    { id: "p4", sku: "EA-004", name: "หูฟังบลูทูธ TWS", category: "อิเล็กทรอนิกส์", costPrice: 280, sellPrice: 590, stock: 22, imageUrl: "", variants: [] },
-    { id: "p5", sku: "CS-005", name: "เคสมือถือใสกันกระแทก", category: "อิเล็กทรอนิกส์", costPrice: 35, sellPrice: 129, stock: 90, imageUrl: "", variants: [] },
-    { id: "p6", sku: "WC-006", name: "แท่นชาร์จไร้สาย", category: "อิเล็กทรอนิกส์", costPrice: 180, sellPrice: 399, stock: 18, imageUrl: "", variants: [] },
-    { id: "p7", sku: "UM-007", name: "ร่มพับกันแดด UV", category: "ของใช้ทั่วไป", costPrice: 95, sellPrice: 229, stock: 26, imageUrl: "", variants: [] },
-    { id: "p8", sku: "TB-008", name: "กระเป๋าสะพายลำลอง", category: "กระเป๋า", costPrice: 210, sellPrice: 450, stock: 12, imageUrl: "", variants: [] },
-  ];
-  const customers = [
-    { id: "c1", name: "สมชาย ใจดี", phone: "081-234-5671", address: "กรุงเทพมหานคร", email: "", taxId: "" },
-    { id: "c2", name: "วราภรณ์ สายทอง", phone: "082-345-6782", address: "เชียงใหม่", email: "", taxId: "" },
-    { id: "c3", name: "ธนกร พงษ์ศิริ", phone: "083-456-7893", address: "ชลบุรี", email: "", taxId: "" },
-    { id: "c4", name: "ปิยะดา แสงอรุณ", phone: "084-567-8904", address: "นนทบุรี", email: "", taxId: "" },
-  ];
-  const suppliers = [
-    { id: "s1", name: "บจก. สยามแพคเกจจิ้ง", contact: "คุณอนันต์", phone: "02-111-2222", address: "สมุทรปราการ" },
-    { id: "s2", name: "หจก. ไทยอิมพอร์ตกรุ๊ป", contact: "คุณนภา", phone: "02-333-4444", address: "กรุงเทพมหานคร" },
-    { id: "s3", name: "บจก. โกลบอลซัพพลาย", contact: "คุณวิชัย", phone: "02-555-6666", address: "ปทุมธานี" },
-  ];
-
-  const orders = [];
-  const stockMoves = [];
-  const financeEntries = [];
-  const today = new Date();
-
-  products.forEach((p) => {
-    stockMoves.push({
-      id: uid(), productId: p.id, variantId: null, type: "in", qty: p.stock + 60,
-      date: new Date(today.getFullYear(), today.getMonth() - 7, 1).toISOString(),
-      note: "สต๊อกเริ่มต้น (รับเข้าครั้งแรก)", refOrderId: null,
-    });
-  });
-
-  let orderCounter = 1;
-  const soldQty = {};
-  const totalDays = 365 * 4 + 210;
-  const channelKeys = CHANNELS.map((c) => c.key);
-  for (let dayOffset = totalDays; dayOffset >= 0; dayOffset--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - dayOffset);
-    date.setHours(9 + Math.floor(rand() * 9), Math.floor(rand() * 60));
-    const recentBoost = dayOffset <= 210;
-    const chance = recentBoost ? 0.88 : 0.35;
-    const numOrders = rand() < chance ? Math.floor(rand() * (recentBoost ? 4 : 2)) : 0;
-    for (let i = 0; i < numOrders; i++) {
-      const itemCount = 1 + Math.floor(rand() * 3);
-      const chosen = new Set();
-      while (chosen.size < itemCount) chosen.add(products[Math.floor(rand() * products.length)].id);
-      const items = Array.from(chosen).map((pid) => {
-        const p = products.find((x) => x.id === pid);
-        const qty = 1 + Math.floor(rand() * 3);
-        soldQty[pid] = (soldQty[pid] || 0) + qty;
-        return { productId: pid, variantId: null, sku: p.sku, name: p.name, imageUrl: p.imageUrl, qty, price: p.sellPrice, cost: p.costPrice };
-      });
-      const discount = rand() < 0.2 ? Math.round(rand() * 50) : 0;
-      const shippingFee = rand() < 0.7 ? 40 : 0;
-      const customerId = customers[Math.floor(rand() * customers.length)].id;
-      const orderNo = "ORD-" + String(orderCounter).padStart(5, "0");
-      orderCounter++;
-      const channel = channelKeys[Math.floor(rand() * channelKeys.length)];
-      const order = { id: uid(), orderNo, date: date.toISOString(), customerId, items, discount, shippingFee, status: "closed", channel, note: "" };
-      orders.push(order);
-      items.forEach((it) => {
-        stockMoves.push({
-          id: uid(), productId: it.productId, variantId: null, type: "out", qty: it.qty,
-          date: date.toISOString(), note: `ตัดสต๊อกจากออเดอร์ ${orderNo}`, refOrderId: order.id,
-        });
-      });
-    }
-  }
-
-  Object.entries(soldQty).forEach(([pid, qty]) => {
-    const p = products.find((x) => x.id === pid);
-    if (p) p.stock = Math.max(3, p.stock + 60 - qty);
-  });
-
-  for (let m = 6; m >= 0; m--) {
-    const d = new Date(today.getFullYear(), today.getMonth() - m, 5);
-    EXPENSE_CATS.filter((c) => c !== "อื่นๆ").forEach((cat) => {
-      let amt = 0;
-      if (cat === "ค่าเช่าคลังสินค้า") amt = 8000;
-      else if (cat === "ค่าการตลาด/โฆษณา") amt = 3000 + Math.round(rand() * 4000);
-      else if (cat === "ค่าขนส่ง") amt = 1500 + Math.round(rand() * 1500);
-      else if (cat === "เงินเดือนพนักงาน") amt = 15000;
-      else if (cat === "ค่าสาธารณูปโภค") amt = 1200 + Math.round(rand() * 800);
-      financeEntries.push({ id: uid(), date: d.toISOString(), type: "expense", category: cat, amount: amt, note: "", refOrderId: null });
-    });
-  }
-
-  const shopInfo = { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" };
-
-  return { products, customers, suppliers, orders, stockMoves, financeEntries, categories: [...DEFAULT_CATEGORIES], shopInfo };
+  return { products: [], customers: [], suppliers: [], orders: [], stockMoves: [], financeEntries: [], categories: [...DEFAULT_CATEGORIES], shopInfo: { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" } };
 }
 
 /* ============================== DERIVED CALC ============================== */
@@ -260,8 +216,6 @@ const orderTotals = (order) => {
   const profit = total - cost;
   return { subtotal, cost, total, profit };
 };
-const productTotalStock = (p) => p.stock + (p.variants || []).reduce((s, v) => s + v.stock, 0);
-const productStockValue = (p) => p.stock * p.costPrice + (p.variants || []).reduce((s, v) => s + v.stock * p.costPrice, 0);
 
 /* ============================== UI PRIMITIVES ============================== */
 const Card = ({ children, className = "", style }) => (
@@ -502,17 +456,17 @@ function EntityTable({ title, columns, data, onAdd, onEdit, onDelete, searchKeys
   );
 }
 
-/* ============================== PRODUCT MODAL (with sub-items + inline category add) ============================== */
+/* ============================== PRODUCT MODAL (basic info + variants; stock is handled via lots, not here) ============================== */
 function ProductModal({ open, onClose, initial, onSave, categories, onAddCategory }) {
   const isEdit = !!(initial && initial.id);
-  const blank = { sku: "", name: "", category: "", costPrice: "", sellPrice: "", stock: 0, imageUrl: "", variants: [] };
+  const blank = { sku: "", name: "", category: "", costPrice: "", sellPrice: "", imageUrl: "", variants: [] };
   const [form, setForm] = useState(blank);
   const [newCat, setNewCat] = useState("");
   const [addingCat, setAddingCat] = useState(false);
   useEffect(() => { setForm(initial ? { ...blank, ...initial, variants: (initial.variants || []).map((v) => ({ ...v })) } : blank); setAddingCat(false); setNewCat(""); }, [initial, open]);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const addVariant = () => setForm((f) => ({ ...f, variants: [...f.variants, { id: uid(), sku: "", name: "", sellPrice: "", stock: "" }] }));
+  const addVariant = () => setForm((f) => ({ ...f, variants: [...f.variants, { id: uid(), sku: "", name: "", sellPrice: "" }] }));
   const updateVariant = (id, k, v) => setForm((f) => ({ ...f, variants: f.variants.map((x) => x.id === id ? { ...x, [k]: v } : x) }));
   const removeVariant = (id) => setForm((f) => ({ ...f, variants: f.variants.filter((x) => x.id !== id) }));
 
@@ -532,16 +486,14 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
       .filter((v) => v.sku || v.name)
       .map((v) => {
         if (!v.sku || !v.name || v.sellPrice === "") return null;
-        return { id: v.id, sku: v.sku, name: v.name, sellPrice: Number(v.sellPrice), stock: Number(v.stock || 0) };
+        return { id: v.id, sku: v.sku, name: v.name, sellPrice: Number(v.sellPrice) };
       });
     if (cleanVariants.includes(null)) { alert("สินค้าย่อยแต่ละรายการต้องกรอก รหัส/ชื่อ/ราคาขาย ให้ครบ"); return; }
-    const payload = {
+    onSave({
       sku: form.sku, name: form.name, category: form.category,
       costPrice: Number(form.costPrice), sellPrice: Number(form.sellPrice),
       imageUrl: form.imageUrl, variants: cleanVariants,
-    };
-    if (!isEdit) payload.stock = Number(form.stock || 0);
-    onSave(payload);
+    });
   };
 
   return (
@@ -568,16 +520,18 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
             )}
           </Field>
         </div>
-        <Field label="ราคาทุน" required><Input type="number" min="0" value={form.costPrice} onChange={(e) => set("costPrice", e.target.value)} /></Field>
+        <Field label="ราคาทุนโดยประมาณ" required>
+          <Input type="number" min="0" value={form.costPrice} onChange={(e) => set("costPrice", e.target.value)} />
+          <div className="text-xs mt-1" style={{ color: C.faint }}>ใช้เป็นค่าเริ่มต้นตอนรับสต๊อกเข้าเท่านั้น ไม่ทับต้นทุนของล็อตที่มีอยู่แล้ว</div>
+        </Field>
         <Field label="ราคาขาย" required><Input type="number" min="0" value={form.sellPrice} onChange={(e) => set("sellPrice", e.target.value)} /></Field>
-        {!isEdit && <Field label="จำนวนคงเหลือเริ่มต้น"><Input type="number" min="0" value={form.stock} onChange={(e) => set("stock", e.target.value)} /></Field>}
       </div>
 
       <div className="mt-2 pt-4" style={{ borderTop: `1px dashed ${C.border}` }}>
         <div className="flex items-center justify-between mb-2">
           <div>
             <div className="text-sm font-bold flex items-center gap-1.5" style={{ color: C.text }}><Layers size={15} /> สินค้าย่อย (ตัวเลือกย่อย)</div>
-            <div className="text-xs" style={{ color: C.sub }}>เช่น สี, ไซส์ — ไม่บังคับ กรอกแค่ รหัส / ชื่อ / ราคาขาย / สต๊อก</div>
+            <div className="text-xs" style={{ color: C.sub }}>เช่น สี, ไซส์ — ไม่บังคับ กรอกแค่ รหัส / ชื่อ / ราคาขาย (สต๊อกเริ่มต้นให้ไปรับเข้าที่ปุ่ม "รับสินค้าเข้า" หลังบันทึก)</div>
           </div>
           <Btn variant="subtle" icon={Plus} onClick={addVariant}>เพิ่มสินค้าย่อย</Btn>
         </div>
@@ -586,11 +540,10 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
         ) : (
           <div className="flex flex-col gap-2">
             {form.variants.map((v) => (
-              <div key={v.id} className="grid gap-2 items-center p-2 rounded-xl" style={{ gridTemplateColumns: "1fr 1fr 90px 80px auto", background: C.bg }}>
+              <div key={v.id} className="grid gap-2 items-center p-2 rounded-xl" style={{ gridTemplateColumns: "1fr 1fr 100px auto", background: C.bg }}>
                 <Input placeholder="รหัสสินค้าย่อย" value={v.sku} onChange={(e) => updateVariant(v.id, "sku", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
                 <Input placeholder="ชื่อ (เช่น ไซส์ M)" value={v.name} onChange={(e) => updateVariant(v.id, "name", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
                 <Input type="number" min="0" placeholder="ราคาขาย" value={v.sellPrice} onChange={(e) => updateVariant(v.id, "sellPrice", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
-                <Input type="number" min="0" placeholder="สต๊อก" value={v.stock} onChange={(e) => updateVariant(v.id, "stock", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
                 <IconBtn icon={X} tone="danger" title="ลบสินค้าย่อย" onClick={() => removeVariant(v.id)} />
               </div>
             ))}
@@ -601,7 +554,7 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
   );
 }
 
-/* ============================== STOCK ADJUST MODAL ============================== */
+/* ============================== STOCK / LOT MANAGEMENT MODAL (FIFO) ============================== */
 function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }) {
   const [target, setTarget] = useState("");
   const [type, setType] = useState("in");
@@ -612,28 +565,35 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
   useEffect(() => {
     if (open) {
       setTarget(""); setType("in");
-      setLots([{ id: uid(), supplierId: "", qty: "", costPrice: "" }]);
+      setLots([{ id: uid(), supplierId: "", qty: "", costPrice: product ? String(product.costPrice ?? "") : "" }]);
       setOutQty(""); setNote("");
     }
   }, [open, product]);
 
   if (!product) return null;
-  const options = [{ id: "", label: `${product.name} (สินค้าหลัก) — คงเหลือ ${product.stock}` },
-    ...(product.variants || []).map((v) => ({ id: v.id, label: `${v.name} (${v.sku}) — คงเหลือ ${v.stock}` }))];
+  const options = [{ id: "", label: `${product.name} (สินค้าหลัก) — คงเหลือ ${stockOf(product, null)}` },
+    ...(product.variants || []).map((v) => ({ id: v.id, label: `${v.name} (${v.sku}) — คงเหลือ ${stockOf(product, v.id)}` }))];
 
   const addLotRow = () => setLots((l) => [...l, { id: uid(), supplierId: "", qty: "", costPrice: "" }]);
   const updateLot = (id, k, v) => setLots((l) => l.map((x) => x.id === id ? { ...x, [k]: v } : x));
   const removeLot = (id) => setLots((l) => l.filter((x) => x.id !== id));
 
+  const activeLots = lotsFor(product, target || null);
+  const outPreview = type === "out" && outQty ? (() => {
+    const sim = deductFIFO(product.lots || [], target || null, Number(outQty) || 0);
+    return sim;
+  })() : null;
+
   const submit = () => {
     if (type === "in") {
       const cleanLots = lots.filter((l) => l.qty && Number(l.qty) > 0).map((l) => ({
-        supplierId: l.supplierId || null, qty: Number(l.qty), costPrice: l.costPrice === "" ? null : Number(l.costPrice),
+        supplierId: l.supplierId || null, qty: Number(l.qty), costPrice: l.costPrice === "" ? (product.costPrice || 0) : Number(l.costPrice),
       }));
       if (cleanLots.length === 0) { alert("กรุณาระบุจำนวนอย่างน้อย 1 รายการ"); return; }
       onSubmit({ productId: product.id, variantId: target || null, type: "in", lots: cleanLots, note });
     } else {
       if (!outQty || Number(outQty) <= 0) { alert("กรุณาระบุจำนวนให้ถูกต้อง"); return; }
+      if (Number(outQty) > stockOf(product, target || null)) { alert("จำนวนที่ตัดออกมากกว่าคงเหลือ"); return; }
       onSubmit({ productId: product.id, variantId: target || null, type: "out", qty: Number(outQty), note });
     }
   };
@@ -643,12 +603,12 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
   const supplierName = (id) => suppliers.find((s) => s.id === id)?.name;
 
   return (
-    <Modal open={open} onClose={onClose} title={`จัดการสต๊อก — ${product.name}`} width={620}>
+    <Modal open={open} onClose={onClose} title={`รับ/ตัดสต๊อก — ${product.name}`} width={640}>
       <div className="flex items-center gap-3 mb-4">
         <Thumb src={product.imageUrl} size={48} />
         <div>
           <div className="text-sm font-bold" style={{ color: C.text }}>{product.name}</div>
-          <div className="text-xs" style={{ color: C.sub }}>รวมคงเหลือทั้งหมด {productTotalStock(product)}</div>
+          <div className="text-xs" style={{ color: C.sub }}>รวมคงเหลือทั้งหมด {productTotalStock(product)} · มูลค่าสต๊อก {money(productStockValue(product))}</div>
         </div>
       </div>
       <Field label="เลือกรายการ (สินค้าหลัก หรือ สินค้าย่อย)">
@@ -660,11 +620,11 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
         <div className="flex gap-2">
           <button onClick={() => setType("in")} className="flex-1 py-2 rounded-xl text-sm font-semibold flex items-center justify-center gap-1"
             style={{ background: type === "in" ? C.successSoft : "#fff", color: type === "in" ? C.success : C.sub, border: `1px solid ${type === "in" ? C.success : C.border}` }}>
-            <Plus size={14} /> รับเข้า
+            <Plus size={14} /> รับสินค้าเข้า
           </button>
           <button onClick={() => setType("out")} className="flex-1 py-2 rounded-xl text-sm font-semibold flex items-center justify-center gap-1"
             style={{ background: type === "out" ? C.dangerSoft : "#fff", color: type === "out" ? C.danger : C.sub, border: `1px solid ${type === "out" ? C.danger : C.border}` }}>
-            <Minus size={14} /> ตัดออก
+            <Minus size={14} /> ตัดออก (FIFO)
           </button>
         </div>
       </Field>
@@ -672,7 +632,7 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
       {type === "in" ? (
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-semibold" style={{ color: C.sub }}>รายการรับเข้า (เพิ่มได้หลายรายการ ต่างผู้จำหน่าย/ต้นทุนกันได้)</span>
+            <span className="text-xs font-semibold" style={{ color: C.sub }}>รายการรับเข้า (แต่ละแถวจะถูกบันทึกเป็นล็อตแยก ต้นทุนไม่ปนกัน)</span>
             <Btn variant="subtle" icon={Plus} onClick={addLotRow}>เพิ่มรายการ</Btn>
           </div>
           <div className="flex flex-col gap-2">
@@ -688,14 +648,43 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
               </div>
             ))}
           </div>
-          <div className="text-xs mt-1.5" style={{ color: C.faint }}>เว้นว่างช่องต้นทุนได้ถ้าต้นทุนเท่าเดิม ระบบจะคำนวณต้นทุนเฉลี่ยใหม่ให้อัตโนมัติ</div>
         </div>
       ) : (
-        <Field label="จำนวน" required><Input type="number" min="1" value={outQty} onChange={(e) => setOutQty(e.target.value)} /></Field>
+        <div className="mb-3">
+          <Field label="จำนวนที่ตัดออก" required><Input type="number" min="1" value={outQty} onChange={(e) => setOutQty(e.target.value)} /></Field>
+          {outPreview && (
+            <div className="text-xs rounded-lg p-2.5" style={{ background: C.warningSoft, color: C.warning }}>
+              {outPreview.shortfall > 0
+                ? `⚠ สต๊อกไม่พอ (ขาดอีก ${outPreview.shortfall})`
+                : `จะตัดต้นทุนรวม ${money(outPreview.cost)} (คำนวณแบบ FIFO จากล็อตเก่าสุดก่อน)`}
+            </div>
+          )}
+        </div>
       )}
 
       <Field label="หมายเหตุ"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="เช่น เลขที่เอกสาร" /></Field>
       <Btn className="w-full justify-center mb-4" onClick={submit}>บันทึกรายการสต๊อก</Btn>
+
+      <div className="pt-3 mb-4" style={{ borderTop: `1px dashed ${C.border}` }}>
+        <div className="text-xs font-semibold mb-2" style={{ color: C.sub }}>ล็อตคงเหลือ (เรียงเก่า→ใหม่ ตามลำดับ FIFO ที่จะถูกตัดก่อน)</div>
+        {activeLots.length === 0 ? <EmptyState text="ยังไม่มีล็อตคงเหลือ" /> : (
+          <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
+            {activeLots.map((l, i) => (
+              <div key={l.id} className="flex items-center justify-between px-3 py-2 text-xs" style={{ borderBottom: i < activeLots.length - 1 ? `1px solid ${C.border}` : "none", background: i === 0 ? C.successSoft : "#fff" }}>
+                <div>
+                  <span className="font-semibold" style={{ color: C.text }}>{fmtDate(l.date)}</span>
+                  {l.supplierId && <span style={{ color: C.sub }}> · {supplierName(l.supplierId) || "-"}</span>}
+                  {i === 0 && <span className="ml-1.5"><Badge tone="success">ตัดก่อน</Badge></span>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="mono" style={{ color: C.text }}>ทุน {money(l.costPrice)}</span>
+                  <span className="mono font-bold" style={{ color: C.text }}>{l.qty} ชิ้น</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="pt-3" style={{ borderTop: `1px dashed ${C.border}` }}>
         <div className="text-xs font-semibold mb-2" style={{ color: C.sub }}>ประวัติการเคลื่อนไหวล่าสุด</div>
@@ -706,6 +695,7 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
                 <span className="font-semibold" style={{ color: C.text }}>{labelFor(m)}</span>
                 <span style={{ color: C.faint }}> · {fmtDateTime(m.date)}</span>
                 {m.supplierId && <div style={{ color: C.sub }}>ผู้จำหน่าย: {supplierName(m.supplierId) || "-"}</div>}
+                {m.cost != null && <div style={{ color: C.sub }}>ต้นทุนรวม: {money(m.cost)}</div>}
                 {m.costPrice != null && <div style={{ color: C.sub }}>ต้นทุน/หน่วย: {money(m.costPrice)}</div>}
                 {m.note && <div style={{ color: C.sub }}>{m.note}</div>}
               </div>
@@ -718,7 +708,6 @@ function StockAdjustModal({ open, onClose, product, moves, suppliers, onSubmit }
   );
 }
 
-/* ============================== SHOP SETTINGS MODAL ============================== */
 /* ============================== RECEIPT / QUOTATION (A4 print) ============================== */
 function DocRow({ label, value, bold }) {
   if (!value) return null;
@@ -856,6 +845,8 @@ function ReceiptView({ open, onClose, order, customer, shopInfo }) {
     </div>
   );
 }
+
+/* ============================== SHOP SETTINGS MODAL ============================== */
 function ShopSettingsModal({ open, onClose, shopInfo, onSave }) {
   const [form, setForm] = useState(shopInfo || {});
   useEffect(() => { setForm(shopInfo || {}); }, [shopInfo, open]);
@@ -913,7 +904,7 @@ function Sidebar({ page, setPage, open, setOpen, onReset, onOpenSettings }) {
             <Receipt size={16} /> ข้อมูลร้านค้า
           </button>
           <button onClick={onReset} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#7C8CB0" }}>
-            <RotateCcw size={16} /> รีเซ็ตข้อมูลตัวอย่าง
+            <RotateCcw size={16} /> ล้างข้อมูลทั้งหมด
           </button>
         </div>
       </aside>
@@ -1056,7 +1047,7 @@ function Dashboard({ data }) {
         <StatCard label="ต้นทุนขาย" value={money(totals.cost)} icon={Package} tone="warning" />
         <StatCard label="กำไรสุทธิ" value={money(totals.netProfit)} icon={totals.netProfit >= 0 ? TrendingUp : TrendingDown} tone={totals.netProfit >= 0 ? "success" : "danger"} />
         <StatCard label="จำนวนออเดอร์" value={num(totals.orderCount)} icon={ShoppingCart} tone="default" />
-        <StatCard label="มูลค่าสต๊อกคงเหลือ" value={money(totals.stockValue)} icon={Package} tone="default" sub="ราคาทุน ณ ปัจจุบัน" />
+        <StatCard label="มูลค่าสต๊อกคงเหลือ" value={money(totals.stockValue)} icon={Package} tone="default" sub="รวมทุกล็อต" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
@@ -1126,7 +1117,7 @@ function ProductsPage({ data, actions }) {
 
   return (
     <div>
-      <PageHeader title="สินค้าและสต๊อก" subtitle={`ทั้งหมด ${data.products.length} รายการ — จัดการสินค้า สินค้าย่อย และรับเข้า/ตัดสต๊อกได้ในหน้าเดียว`}
+      <PageHeader title="สินค้าและสต๊อก" subtitle={`ทั้งหมด ${data.products.length} รายการ — รับเข้า/ตัดสต๊อกแบบ FIFO แยกต้นทุนตามล็อต`}
         actions={<Btn icon={Plus} onClick={() => setModal({})}>เพิ่มสินค้า</Btn>} />
 
       <Card className="p-4">
@@ -1139,7 +1130,7 @@ function ProductsPage({ data, actions }) {
               <th className="text-left py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>รหัส</th>
               <th className="text-left py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>ชื่อสินค้า</th>
               <th className="text-left py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>หมวดหมู่</th>
-              <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>ทุน</th>
+              <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>ทุนเฉลี่ย</th>
               <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>ราคาขาย</th>
               <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>คงเหลือรวม</th>
               <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>จัดการ</th>
@@ -1165,12 +1156,12 @@ function ProductsPage({ data, actions }) {
                         {hasVariants && <span className="ml-1.5"><Badge tone="accent">{p.variants.length} ตัวเลือก</Badge></span>}
                       </td>
                       <td className="py-2 px-2"><Badge>{p.category}</Badge></td>
-                      <td className="py-2 px-2 text-right mono">{money(p.costPrice)}</td>
+                      <td className="py-2 px-2 text-right mono">{money(avgCostOf(p, null))}</td>
                       <td className="py-2 px-2 text-right mono">{money(p.sellPrice)}</td>
                       <td className="py-2 px-2 text-right mono font-bold">{num(productTotalStock(p))}</td>
                       <td className="py-2 px-2">
                         <div className="flex justify-end gap-1">
-                          <IconBtn icon={ArrowLeftRight} tone="accent" title="จัดการสต๊อก" onClick={() => setStockTarget(p)} />
+                          <IconBtn icon={ArrowLeftRight} tone="accent" title="รับ/ตัดสต๊อก" onClick={() => setStockTarget(p)} />
                           <IconBtn icon={Pencil} tone="accent" title="แก้ไข" onClick={() => setModal(p)} />
                           <IconBtn icon={Trash2} tone="danger" title="ลบ" onClick={() => setDel(p)} />
                         </div>
@@ -1188,8 +1179,9 @@ function ProductsPage({ data, actions }) {
                                   <span className="font-semibold" style={{ color: C.text }}>{v.name}</span>
                                 </div>
                                 <div className="flex items-center gap-4">
+                                  <span className="mono" style={{ color: C.sub }}>ทุนเฉลี่ย {money(avgCostOf(p, v.id))}</span>
                                   <span className="mono" style={{ color: C.text }}>{money(v.sellPrice)}</span>
-                                  <span className="mono font-bold" style={{ color: C.text }}>คงเหลือ {v.stock}</span>
+                                  <span className="mono font-bold" style={{ color: C.text }}>คงเหลือ {stockOf(p, v.id)}</span>
                                 </div>
                               </div>
                             ))}
@@ -1236,7 +1228,6 @@ function OrdersPage({ data, actions, shopInfo }) {
   const filteredProducts = data.products.filter((p) => !productQuery || p.name.toLowerCase().includes(productQuery.toLowerCase()) || p.sku.toLowerCase().includes(productQuery.toLowerCase()));
 
   const resetCustomerFields = () => { setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setCustomerEmail(""); setCustomerTaxId(""); };
-
   const selectExistingCustomer = (c) => {
     setCustomerName(c.name); setCustomerPhone(c.phone || ""); setCustomerAddress(c.address || ""); setCustomerEmail(c.email || ""); setCustomerTaxId(c.taxId || "");
   };
@@ -1244,23 +1235,24 @@ function OrdersPage({ data, actions, shopInfo }) {
   const addToCart = (p, variant) => {
     const variantId = variant ? variant.id : null;
     const price = variant ? variant.sellPrice : p.sellPrice;
-    const avail = variant ? variant.stock : p.stock;
+    const avail = stockOf(p, variantId);
+    const estCost = avgCostOf(p, variantId);
     const name = variant ? `${p.name} — ${variant.name}` : p.name;
     const sku = variant ? variant.sku : p.sku;
     if (avail <= 0) return;
     setCart((c) => {
       const existing = c.find((i) => i.productId === p.id && (i.variantId || null) === variantId);
       if (existing) return c.map((i) => i === existing ? { ...i, qty: Math.min(i.qty + 1, avail) } : i);
-      return [...c, { productId: p.id, variantId, sku, name, price, cost: p.costPrice, qty: 1, imageUrl: p.imageUrl, avail }];
+      return [...c, { productId: p.id, variantId, sku, name, price, cost: estCost, qty: 1, imageUrl: p.imageUrl, avail }];
     });
   };
   const updateQty = (idx, qty, avail) => setCart((c) => c.map((i, ix) => ix === idx ? { ...i, qty: Math.max(1, Math.min(Number(qty) || 1, avail)) } : i));
   const removeFromCart = (idx) => setCart((c) => c.filter((_, ix) => ix !== idx));
 
   const subtotal = cart.reduce((s, i) => s + i.qty * i.price, 0);
-  const cost = cart.reduce((s, i) => s + i.qty * i.cost, 0);
+  const estCostTotal = cart.reduce((s, i) => s + i.qty * i.cost, 0);
   const total = subtotal - Number(discount || 0) + Number(shippingFee || 0);
-  const profit = total - cost;
+  const estProfit = total - estCostTotal;
 
   const resolveCustomerId = () => {
     const name = customerName.trim();
@@ -1292,7 +1284,7 @@ function OrdersPage({ data, actions, shopInfo }) {
 
   return (
     <div>
-      <PageHeader title="ระบบออเดอร์" subtitle="สร้างออเดอร์ คำนวณยอดอัตโนมัติ และตัดสต๊อกทันที"
+      <PageHeader title="ระบบออเดอร์" subtitle="สร้างออเดอร์ คำนวณยอดอัตโนมัติ และตัดสต๊อกแบบ FIFO ทันที"
         actions={<Btn icon={Plus} onClick={() => setTab("new")}>สร้างออเดอร์ใหม่</Btn>} />
 
       <div className="flex gap-2 mb-4">
@@ -1305,31 +1297,37 @@ function OrdersPage({ data, actions, shopInfo }) {
           <Card className="p-4 lg:col-span-3">
             <SearchBox value={productQuery} onChange={setProductQuery} placeholder="ค้นหาสินค้าเพื่อเพิ่มลงออเดอร์..." />
             <div className="flex flex-col gap-2.5 mt-4 max-h-[500px] overflow-y-auto pr-1">
-              {filteredProducts.map((p) => (
-                <div key={p.id} className="p-3 rounded-xl" style={{ border: `1px solid ${C.border}` }}>
-                  <button onClick={() => addToCart(p)} disabled={p.stock <= 0 || (p.variants || []).length > 0}
-                    className="flex gap-3 items-center w-full text-left disabled:cursor-default">
-                    <Thumb src={p.imageUrl} size={44} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold truncate" style={{ color: C.text }}>{p.name}</div>
-                      <div className="text-xs mt-0.5" style={{ color: C.sub }}>{p.sku} · คงเหลือ {p.stock}</div>
-                      <div className="mono text-sm font-bold mt-1" style={{ color: C.accent }}>{money(p.sellPrice)}</div>
-                    </div>
-                    {(p.variants || []).length === 0 && <Plus size={16} style={{ color: C.accent }} />}
-                  </button>
-                  {(p.variants || []).length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.border}` }}>
-                      {p.variants.map((v) => (
-                        <button key={v.id} onClick={() => addToCart(p, v)} disabled={v.stock <= 0}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
-                          style={{ background: C.accentSoft, color: C.accentDark, border: `1px solid ${C.accentSoft}` }}>
-                          {v.name} · {money(v.sellPrice)} · เหลือ {v.stock}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+              {filteredProducts.map((p) => {
+                const mainAvail = stockOf(p, null);
+                return (
+                  <div key={p.id} className="p-3 rounded-xl" style={{ border: `1px solid ${C.border}` }}>
+                    <button onClick={() => addToCart(p)} disabled={mainAvail <= 0 || (p.variants || []).length > 0}
+                      className="flex gap-3 items-center w-full text-left disabled:cursor-default">
+                      <Thumb src={p.imageUrl} size={44} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate" style={{ color: C.text }}>{p.name}</div>
+                        <div className="text-xs mt-0.5" style={{ color: C.sub }}>{p.sku} · คงเหลือ {mainAvail}</div>
+                        <div className="mono text-sm font-bold mt-1" style={{ color: C.accent }}>{money(p.sellPrice)}</div>
+                      </div>
+                      {(p.variants || []).length === 0 && <Plus size={16} style={{ color: C.accent }} />}
+                    </button>
+                    {(p.variants || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.border}` }}>
+                        {p.variants.map((v) => {
+                          const vAvail = stockOf(p, v.id);
+                          return (
+                            <button key={v.id} onClick={() => addToCart(p, v)} disabled={vAvail <= 0}
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+                              style={{ background: C.accentSoft, color: C.accentDark, border: `1px solid ${C.accentSoft}` }}>
+                              {v.name} · {money(v.sellPrice)} · เหลือ {vAvail}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </Card>
 
@@ -1376,8 +1374,9 @@ function OrdersPage({ data, actions, shopInfo }) {
               <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ส่วนลด</span><span className="mono">-{money(discount)}</span></div>
               <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ค่าจัดส่ง</span><span className="mono">+{money(shippingFee)}</span></div>
               <div className="flex justify-between text-sm font-bold pt-1.5" style={{ color: C.accentDark, borderTop: `1px dashed ${C.accent}` }}><span>ยอดชำระสุทธิ</span><span className="mono">{money(total)}</span></div>
-              <div className="flex justify-between text-xs pt-1" style={{ color: C.sub }}><span>ต้นทุนรวม</span><span className="mono">{money(cost)}</span></div>
-              <div className="flex justify-between text-xs font-bold" style={{ color: profit >= 0 ? C.success : C.danger }}><span>กำไรโดยประมาณ</span><span className="mono">{money(profit)}</span></div>
+              <div className="flex justify-between text-xs pt-1" style={{ color: C.sub }}><span>ต้นทุนโดยประมาณ</span><span className="mono">{money(estCostTotal)}</span></div>
+              <div className="flex justify-between text-xs font-bold" style={{ color: estProfit >= 0 ? C.success : C.danger }}><span>กำไรโดยประมาณ</span><span className="mono">{money(estProfit)}</span></div>
+              <div className="text-[11px]" style={{ color: C.faint }}>* ต้นทุนจริงคำนวณแบบ FIFO ตอนกดยืนยัน อาจต่างจากตัวเลขนี้เล็กน้อย</div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Btn variant="ghost" className="justify-center" onClick={() => submitOrder("pending")}>บันทึกก่อน</Btn>
@@ -1456,7 +1455,7 @@ function OrdersPage({ data, actions, shopInfo }) {
                 <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ส่วนลด</span><span className="mono">-{money(detail.discount)}</span></div>
                 <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ค่าจัดส่ง</span><span className="mono">+{money(detail.shippingFee)}</span></div>
                 <div className="flex justify-between font-bold text-sm"><span>ยอดสุทธิ</span><span className="mono">{money(t.total)}</span></div>
-                <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ต้นทุน</span><span className="mono">{money(t.cost)}</span></div>
+                <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ต้นทุน (FIFO)</span><span className="mono">{money(t.cost)}</span></div>
                 <div className="flex justify-between font-bold text-sm" style={{ color: t.profit >= 0 ? C.success : C.danger }}><span>กำไร</span><span className="mono">{money(t.profit)}</span></div>
               </div>
             </div>
@@ -1618,8 +1617,12 @@ function ReportsPage({ data }) {
   const stockList = useMemo(() => {
     const rows = [];
     data.products.forEach((p) => {
-      rows.push({ sku: p.sku, name: p.name, imageUrl: p.imageUrl, stock: p.stock, value: p.stock * p.costPrice });
-      (p.variants || []).forEach((v) => rows.push({ sku: v.sku, name: `${p.name} — ${v.name}`, imageUrl: p.imageUrl, stock: v.stock, value: v.stock * p.costPrice }));
+      const mainStock = stockOf(p, null);
+      if (mainStock > 0 || (p.variants || []).length === 0) rows.push({ sku: p.sku, name: p.name, imageUrl: p.imageUrl, stock: mainStock, value: mainStock * avgCostOf(p, null) });
+      (p.variants || []).forEach((v) => {
+        const vStock = stockOf(p, v.id);
+        rows.push({ sku: v.sku, name: `${p.name} — ${v.name}`, imageUrl: p.imageUrl, stock: vStock, value: vStock * avgCostOf(p, v.id) });
+      });
     });
     return rows.sort((a, b) => a.stock - b.stock);
   }, [data.products]);
@@ -1749,7 +1752,6 @@ function ReportsPage({ data }) {
 
 /* ============================== APP ROOT ============================== */
 const STORAGE_KEY = "ims-app-data";
-const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 export default function App() {
   const [page, setPage] = useState("orders");
@@ -1775,6 +1777,7 @@ export default function App() {
         if (parsed) {
           if (!parsed.categories) parsed.categories = [...DEFAULT_CATEGORIES];
           if (!parsed.shopInfo) parsed.shopInfo = { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" };
+          parsed.products = (parsed.products || []).map(migrateProduct);
           setData(parsed);
         } else setData(buildSeedData());
       } catch { setData(buildSeedData()); }
@@ -1798,7 +1801,7 @@ export default function App() {
   };
 
   const actions = {
-    addProduct: (p) => setData((d) => ({ ...d, products: [...d.products, { variants: [], ...p }] })),
+    addProduct: (p) => setData((d) => ({ ...d, products: [...d.products, { variants: [], lots: [], ...p }] })),
     editProduct: (p) => setData((d) => ({ ...d, products: d.products.map((x) => x.id === p.id ? { ...x, ...p } : x) })),
     deleteProduct: (id) => setData((d) => ({ ...d, products: d.products.filter((x) => x.id !== id) })),
     addCategory: (name) => setData((d) => d.categories.includes(name) ? d : { ...d, categories: [...d.categories, name] }),
@@ -1808,24 +1811,15 @@ export default function App() {
     addSupplier: (s) => setData((d) => ({ ...d, suppliers: [...d.suppliers, s] })),
     editSupplier: (s) => setData((d) => ({ ...d, suppliers: d.suppliers.map((x) => x.id === s.id ? { ...x, ...s } : x) })),
     deleteSupplier: (id) => setData((d) => ({ ...d, suppliers: d.suppliers.filter((x) => x.id !== id) })),
+
     addStockMove: (m) => setData((d) => {
       const moves = [];
       let products = d.products;
       if (m.type === "in" && m.lots) {
-        const totalNewQty = m.lots.reduce((s, l) => s + l.qty, 0);
-        const totalKnownValue = m.lots.filter((l) => l.costPrice != null).reduce((s, l) => s + l.qty * l.costPrice, 0);
-        const unknownCostQty = m.lots.filter((l) => l.costPrice == null).reduce((s, l) => s + l.qty, 0);
         products = products.map((p) => {
           if (p.id !== m.productId) return p;
-          const currentTotalStock = productTotalStock(p);
-          const currentTotalValue = currentTotalStock * p.costPrice;
-          const newTotalStock = currentTotalStock + totalNewQty;
-          const newTotalValue = currentTotalValue + totalKnownValue + unknownCostQty * p.costPrice;
-          const newCostPrice = newTotalStock > 0 ? Math.round((newTotalValue / newTotalStock) * 100) / 100 : p.costPrice;
-          let np = { ...p, costPrice: newCostPrice, variants: (p.variants || []).map((v) => ({ ...v })) };
-          if (m.variantId) np.variants = np.variants.map((v) => v.id === m.variantId ? { ...v, stock: v.stock + totalNewQty } : v);
-          else np.stock = np.stock + totalNewQty;
-          return np;
+          const newLots = m.lots.map((l) => ({ id: uid(), variantId: m.variantId || null, qty: l.qty, costPrice: l.costPrice, supplierId: l.supplierId, date: new Date().toISOString(), note: m.note || "" }));
+          return { ...p, lots: [...(p.lots || []), ...newLots] };
         });
         m.lots.forEach((l) => {
           moves.push({ id: uid(), productId: m.productId, variantId: m.variantId || null, type: "in", qty: l.qty, costPrice: l.costPrice, supplierId: l.supplierId, date: new Date().toISOString(), note: m.note || "", refOrderId: null });
@@ -1833,34 +1827,32 @@ export default function App() {
       } else {
         products = products.map((p) => {
           if (p.id !== m.productId) return p;
-          if (m.variantId) {
-            const variants = (p.variants || []).map((v) => v.id === m.variantId ? { ...v, stock: Math.max(0, v.stock - m.qty) } : v);
-            return { ...p, variants };
-          }
-          return { ...p, stock: Math.max(0, p.stock - m.qty) };
+          const { lots: newLots, cost } = deductFIFO(p.lots || [], m.variantId || null, m.qty);
+          moves.push({ id: uid(), productId: p.id, variantId: m.variantId || null, type: "out", qty: m.qty, cost, date: new Date().toISOString(), note: m.note || "", refOrderId: null });
+          return { ...p, lots: newLots };
         });
-        moves.push({ id: uid(), productId: m.productId, variantId: m.variantId || null, type: "out", qty: m.qty, date: new Date().toISOString(), note: m.note || "", refOrderId: null });
       }
       return { ...d, products, stockMoves: [...d.stockMoves, ...moves] };
     }),
+
     addOrder: (o) => setData((d) => {
       const order = { id: uid(), ...o };
+      const moves = [];
       const products = d.products.map((p) => {
         const items = order.items.filter((i) => i.productId === p.id);
         if (items.length === 0) return p;
-        let np = { ...p, variants: (p.variants || []).map((v) => ({ ...v })) };
+        let currentLots = p.lots || [];
         items.forEach((it) => {
-          if (it.variantId) np.variants = np.variants.map((v) => v.id === it.variantId ? { ...v, stock: Math.max(0, v.stock - it.qty) } : v);
-          else np.stock = Math.max(0, np.stock - it.qty);
+          const { lots: newLots, cost } = deductFIFO(currentLots, it.variantId || null, it.qty);
+          currentLots = newLots;
+          it.cost = it.qty > 0 ? Math.round((cost / it.qty) * 100) / 100 : 0;
+          moves.push({ id: uid(), productId: p.id, variantId: it.variantId || null, type: "out", qty: it.qty, cost, date: order.date, note: `ตัดสต๊อกจากออเดอร์ ${order.orderNo}`, refOrderId: order.id });
         });
-        return np;
+        return { ...p, lots: currentLots };
       });
-      const moves = order.items.map((it) => ({
-        id: uid(), productId: it.productId, variantId: it.variantId || null, type: "out", qty: it.qty, date: order.date,
-        note: `ตัดสต๊อกจากออเดอร์ ${order.orderNo}`, refOrderId: order.id,
-      }));
       return { ...d, products, orders: [...d.orders, order], stockMoves: [...d.stockMoves, ...moves] };
     }),
+
     updateOrderStatus: (id, status) => setData((d) => ({ ...d, orders: d.orders.map((o) => o.id === id ? { ...o, status } : o) })),
     addFinance: (f) => setData((d) => ({ ...d, financeEntries: [...d.financeEntries, { id: uid(), ...f }] })),
     updateShopInfo: (info) => setData((d) => ({ ...d, shopInfo: { ...d.shopInfo, ...info } })),
