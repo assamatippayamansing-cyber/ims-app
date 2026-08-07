@@ -1822,13 +1822,6 @@ export default function App() {
       </div>
     );
   }
-    return (
-      <div className="ims min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
-        <GlobalStyle />
-        <div className="text-sm" style={{ color: C.sub }}>กำลังโหลดข้อมูล...</div>
-      </div>
-    );
-  }
 
   const pageTitles = { dashboard: "แดชบอร์ด", products: "สินค้าและสต๊อก", orders: "ออเดอร์", parties: "ลูกค้า/ผู้จำหน่าย", finance: "รายรับ-รายจ่าย", reports: "รายงาน" };
 
