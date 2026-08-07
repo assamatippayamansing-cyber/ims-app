@@ -1737,9 +1737,9 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
+        const res = await fetch("/api/data");
+        const parsed = await res.json();
+        if (parsed) {
           if (!parsed.categories) parsed.categories = [...DEFAULT_CATEGORIES];
           if (!parsed.shopInfo) parsed.shopInfo = { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" };
           setData(parsed);
@@ -1753,7 +1753,9 @@ export default function App() {
     if (!data) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+      try {
+        await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      } catch {}
     }, 400);
   }, [data]);
 
