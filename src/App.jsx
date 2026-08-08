@@ -65,7 +65,7 @@ const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
 const MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
-const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
+const SITE_PASSWORD = "1234"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 const CHANNELS = [
   { key: "line", label: "LINE", color: "#06C755" },
@@ -1005,39 +1005,44 @@ function MonthlyTrendCard({ orders }) {
 
 function Dashboard({ data }) {
   const [gran, setGran] = useState("day");
+  const [customFrom, setCustomFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10); });
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const productsById = useMemo(() => Object.fromEntries(data.products.map((p) => [p.id, p])), [data.products]);
 
-  const cutoff = useMemo(() => {
-    const d = new Date();
-    if (gran === "day") d.setDate(d.getDate() - 29);
-    else if (gran === "month") d.setMonth(d.getMonth() - 11);
-    else d.setFullYear(d.getFullYear() - 4);
-    return d;
-  }, [gran]);
+  const { rangeStart, rangeEnd } = useMemo(() => {
+    const now = new Date();
+    if (gran === "day") { const s = new Date(now); s.setDate(s.getDate() - 29); s.setHours(0, 0, 0, 0); return { rangeStart: s, rangeEnd: now }; }
+    if (gran === "month") { const s = new Date(now); s.setMonth(s.getMonth() - 11); s.setHours(0, 0, 0, 0); return { rangeStart: s, rangeEnd: now }; }
+    if (gran === "year") { const s = new Date(now); s.setFullYear(s.getFullYear() - 4); s.setHours(0, 0, 0, 0); return { rangeStart: s, rangeEnd: now }; }
+    const s = new Date(customFrom); s.setHours(0, 0, 0, 0);
+    const e = new Date(customTo); e.setHours(23, 59, 59, 999);
+    return { rangeStart: s, rangeEnd: e };
+  }, [gran, customFrom, customTo]);
 
-  const inRange = useMemo(() => data.orders.filter((o) => new Date(o.date) >= cutoff), [data.orders, cutoff]);
+  const inRange = useMemo(() => data.orders.filter((o) => { const d = new Date(o.date); return d >= rangeStart && d <= rangeEnd; }), [data.orders, rangeStart, rangeEnd]);
 
   const chartData = useMemo(() => {
     const map = new Map();
     inRange.forEach((o) => {
-      const key = gran === "day" ? isoDay(o.date) : gran === "month" ? new Date(o.date).toISOString().slice(0, 7) : String(new Date(o.date).getFullYear());
+      const key = gran === "day" || gran === "custom" ? isoDay(o.date) : gran === "month" ? new Date(o.date).toISOString().slice(0, 7) : String(new Date(o.date).getFullYear());
       const t = orderTotals(o);
       if (!map.has(key)) map.set(key, { key, sales: 0, profit: 0 });
       const rec = map.get(key); rec.sales += t.total; rec.profit += t.profit;
     });
     return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key)).map((r) => ({
-      ...r, label: gran === "day" ? fmtDate(r.key) : gran === "month" ? new Date(r.key + "-01").toLocaleDateString("th-TH", { month: "short", year: "2-digit" }) : r.key,
+      ...r, label: gran === "month" ? new Date(r.key + "-01").toLocaleDateString("th-TH", { month: "short", year: "2-digit" }) : gran === "year" ? r.key : fmtDate(r.key),
     }));
   }, [inRange, gran]);
 
   const totals = useMemo(() => {
     let sales = 0, cost = 0, profit = 0;
     inRange.forEach((o) => { const t = orderTotals(o); sales += t.total; cost += t.cost; profit += t.profit; });
-    const expenseInRange = data.financeEntries.filter((f) => new Date(f.date) >= cutoff && f.type === "expense").reduce((s, f) => s + f.amount, 0);
+    const expenseInRange = data.financeEntries.filter((f) => new Date(f.date) >= rangeStart && new Date(f.date) <= rangeEnd && f.type === "expense").reduce((s, f) => s + f.amount, 0);
+    const stockQty = data.products.reduce((s, p) => s + productTotalStock(p), 0);
     const stockValue = data.products.reduce((s, p) => s + productRetailValue(p), 0);
     const stockCost = data.products.reduce((s, p) => s + productStockValue(p), 0);
-    return { sales, cost, netProfit: profit - expenseInRange, orderCount: inRange.length, stockValue, stockCost, revenue: sales };
-  }, [inRange, data, cutoff]);
+    return { sales, cost, netProfit: profit - expenseInRange, orderCount: inRange.length, stockQty, stockValue, stockCost, revenue: sales };
+  }, [inRange, data, rangeStart, rangeEnd]);
 
   const categoryBreakdown = useMemo(() => {
     const map = new Map();
@@ -1059,26 +1064,37 @@ function Dashboard({ data }) {
   }, [inRange]);
 
   const PIE_COLORS = [C.accent, C.success, C.warning, C.danger, "#6E5AC8"];
+  const periodLabel = gran === "day" ? "30 วันล่าสุด" : gran === "month" ? "12 เดือนล่าสุด" : gran === "year" ? "5 ปีล่าสุด" : `${fmtDate(customFrom)} - ${fmtDate(customTo)}`;
 
   return (
     <div>
       <PageHeader title="แดชบอร์ดภาพรวม" subtitle="สรุปยอดขาย กำไร และสถานะสต๊อกแบบเรียลไทม์"
         actions={
-          <div className="flex rounded-xl overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
-            {[{ k: "day", l: "รายวัน" }, { k: "month", l: "รายเดือน" }, { k: "year", l: "รายปี" }].map((g) => (
-              <button key={g.k} onClick={() => setGran(g.k)} className="px-3.5 py-2 text-xs font-semibold" style={{ background: gran === g.k ? C.accent : "#fff", color: gran === g.k ? "#fff" : C.sub }}>{g.l}</button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-xl overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
+              {[{ k: "day", l: "รายวัน" }, { k: "month", l: "รายเดือน" }, { k: "year", l: "รายปี" }, { k: "custom", l: "กำหนดเอง" }].map((g) => (
+                <button key={g.k} onClick={() => setGran(g.k)} className="px-3.5 py-2 text-xs font-semibold" style={{ background: gran === g.k ? C.accent : "#fff", color: gran === g.k ? "#fff" : C.sub }}>{g.l}</button>
+              ))}
+            </div>
+            {gran === "custom" && (
+              <div className="flex items-center gap-2">
+                <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ width: 145, padding: "7px 10px", fontSize: 12 }} />
+                <span className="text-xs" style={{ color: C.sub }}>ถึง</span>
+                <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 145, padding: "7px 10px", fontSize: 12 }} />
+              </div>
+            )}
           </div>
         } />
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3 mb-5">
-        <StatCard label="ยอดขาย" value={money(totals.sales)} sub={gran === "day" ? "30 วันล่าสุด" : gran === "month" ? "12 เดือนล่าสุด" : "5 ปีล่าสุด"} icon={TrendingUp} tone="default" />
-        <StatCard label="รายรับรวม" value={money(totals.revenue)} icon={Wallet} tone="success" />
-        <StatCard label="ต้นทุนขาย" value={money(totals.cost)} icon={Package} tone="warning" />
-        <StatCard label="กำไรสุทธิ" value={money(totals.netProfit)} icon={totals.netProfit >= 0 ? TrendingUp : TrendingDown} tone={totals.netProfit >= 0 ? "success" : "danger"} />
-        <StatCard label="จำนวนออเดอร์" value={num(totals.orderCount)} icon={ShoppingCart} tone="default" />
-        <StatCard label="มูลค่าสต๊อกคงเหลือ" value={money(totals.stockValue)} icon={Package} tone="default" sub="คิดที่ราคาขาย" />
-        <StatCard label="ต้นทุนสต๊อกรวม" value={money(totals.stockCost)} icon={Package} tone="warning" sub="คิดที่ต้นทุนจริง (FIFO)" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <StatCard label="ยอดขาย" value={money(totals.sales)} sub={periodLabel} icon={TrendingUp} tone="default" />
+        <StatCard label="ต้นทุนขาย" value={money(totals.cost)} sub={periodLabel} icon={Package} tone="warning" />
+        <StatCard label="กำไรสุทธิ" value={money(totals.netProfit)} sub={periodLabel} icon={totals.netProfit >= 0 ? TrendingUp : TrendingDown} tone={totals.netProfit >= 0 ? "success" : "danger"} />
+        <StatCard label="จำนวนออเดอร์" value={num(totals.orderCount)} sub={periodLabel} icon={ShoppingCart} tone="default" />
+        <StatCard label="สต๊อก" value={num(totals.stockQty)} icon={Package} tone="default" sub="จำนวนคงเหลือทั้งหมด" />
+        <StatCard label="มูลค่าสต๊อก" value={money(totals.stockValue)} icon={Package} tone="default" sub="คิดที่ราคาขาย" />
+        <StatCard label="ต้นทุนสต๊อก" value={money(totals.stockCost)} icon={Package} tone="warning" sub="คิดที่ต้นทุนจริง (FIFO)" />
+        <StatCard label="รายรับรวม" value={money(totals.revenue)} sub={periodLabel} icon={Wallet} tone="success" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
