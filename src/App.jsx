@@ -65,7 +65,7 @@ const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
 const MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
-const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
+const SITE_PASSWORD = "1234"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 const CHANNELS = [
   { key: "line", label: "LINE", color: "#06C755" },
@@ -312,6 +312,30 @@ const StatCard = ({ label, value, sub, tone = "default", icon: Icon }) => {
 };
 
 const EmptyState = ({ text }) => <div className="py-14 text-center text-sm" style={{ color: C.faint }}>{text}</div>;
+
+const Toast = ({ message }) => {
+  if (!message) return null;
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] no-print">
+      <div className="px-4 py-2.5 rounded-xl text-sm font-semibold" style={{ background: C.text, color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,0.25)" }}>
+        {message}
+      </div>
+    </div>
+  );
+};
+
+function CollapseCard({ title, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card className="p-4 mb-3">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between">
+        <span className="font-bold text-sm" style={{ color: C.text }}>{title}</span>
+        {open ? <ChevronDown size={16} style={{ color: C.sub }} /> : <ChevronRight size={16} style={{ color: C.sub }} />}
+      </button>
+      {open && <div className="mt-3">{children}</div>}
+    </Card>
+  );
+}
 
 const SearchBox = ({ value, onChange, placeholder }) => (
   <div className="relative w-full sm:w-64">
@@ -899,9 +923,12 @@ function Sidebar({ page, setPage, open, setOpen, onReset, onOpenSettings }) {
             );
           })}
         </nav>
-    <div className="px-3 py-4 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.sidebarLine}` }}>
+        <div className="px-3 py-4 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.sidebarLine}` }}>
           <button onClick={onOpenSettings} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#B8C4E0" }}>
             <Receipt size={16} /> ข้อมูลร้านค้า
+          </button>
+          <button onClick={onReset} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#7C8CB0" }}>
+            <RotateCcw size={16} /> ล้างข้อมูลทั้งหมด
           </button>
         </div>
       </aside>
@@ -1196,11 +1223,59 @@ function ProductsPage({ data, actions }) {
       </Card>
 
       <ProductModal open={!!modal} onClose={() => setModal(null)} initial={modal} categories={data.categories} onAddCategory={actions.addCategory}
-        onSave={(payload) => { if (modal && modal.id) actions.editProduct({ ...modal, ...payload }); else actions.addProduct({ id: uid(), ...payload }); setModal(null); }} />
-      <StockAdjustModal open={!!stockTarget} onClose={() => setStockTarget(null)} product={stockTarget} moves={data.stockMoves} suppliers={data.suppliers} onSubmit={actions.addStockMove} />
+        onSave={(payload) => { if (modal && modal.id) actions.editProduct({ ...modal, ...payload }); else actions.addProduct({ id: uid(), ...payload }); actions.notify("บันทึกสินค้าแล้ว"); setModal(null); }} />
+      <StockAdjustModal open={!!stockTarget} onClose={() => setStockTarget(null)} product={stockTarget} moves={data.stockMoves} suppliers={data.suppliers}
+        onSubmit={(payload) => { actions.addStockMove(payload); actions.notify(payload.type === "in" ? "รับสินค้าเข้าแล้ว" : "ตัดสต๊อกแล้ว"); }} />
       <ConfirmDialog open={!!del} onCancel={() => setDel(null)} message={`ต้องการลบ "${del?.name || ""}" ใช่หรือไม่? (รวมสินค้าย่อยทั้งหมด)`}
-        onConfirm={() => { actions.deleteProduct(del.id); setDel(null); }} />
+        onConfirm={() => { actions.deleteProduct(del.id); actions.notify("ลบสินค้าแล้ว"); setDel(null); }} />
     </div>
+  );
+}
+
+/* ============================== ORDERS PAGE ============================== */
+/* ============================== PRODUCT SEARCH MODAL (floating cart button opens this) ============================== */
+function ProductSearchModal({ open, onClose, products, onPick }) {
+  const [q, setQ] = useState("");
+  useEffect(() => { if (open) setQ(""); }, [open]);
+  const filtered = products.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()) || p.sku.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <Modal open={open} onClose={onClose} title="เพิ่มสินค้าลงออเดอร์" width={560}>
+      <SearchBox value={q} onChange={setQ} placeholder="ค้นหาสินค้า..." />
+      <div className="flex flex-col gap-2.5 mt-4 max-h-[440px] overflow-y-auto pr-1">
+        {filtered.map((p) => {
+          const mainAvail = stockOf(p, null);
+          return (
+            <div key={p.id} className="p-3 rounded-xl" style={{ border: `1px solid ${C.border}` }}>
+              <button onClick={() => onPick(p)} disabled={mainAvail <= 0 || (p.variants || []).length > 0}
+                className="flex gap-3 items-center w-full text-left disabled:cursor-default">
+                <Thumb src={p.imageUrl} size={44} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold truncate" style={{ color: C.text }}>{p.name}</div>
+                  <div className="text-xs mt-0.5" style={{ color: C.sub }}>{p.sku} · คงเหลือ {mainAvail}</div>
+                  <div className="mono text-sm font-bold mt-1" style={{ color: C.accent }}>{money(p.sellPrice)}</div>
+                </div>
+                {(p.variants || []).length === 0 && <Plus size={16} style={{ color: C.accent }} />}
+              </button>
+              {(p.variants || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.border}` }}>
+                  {p.variants.map((v) => {
+                    const vAvail = stockOf(p, v.id);
+                    return (
+                      <button key={v.id} onClick={() => onPick(p, v)} disabled={vAvail <= 0}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+                        style={{ background: C.accentSoft, color: C.accentDark, border: `1px solid ${C.accentSoft}` }}>
+                        {v.name} · {money(v.sellPrice)} · เหลือ {vAvail}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <EmptyState text="ไม่พบสินค้า" />}
+      </div>
+    </Modal>
   );
 }
 
@@ -1215,14 +1290,13 @@ function OrdersPage({ data, actions, shopInfo }) {
   const [customerTaxId, setCustomerTaxId] = useState("");
   const [channel, setChannel] = useState("");
   const [discount, setDiscount] = useState(0);
-  const [shippingFee, setShippingFee] = useState(40);
-  const [productQuery, setProductQuery] = useState("");
+  const [shippingFee, setShippingFee] = useState(0);
   const [orderSearch, setOrderSearch] = useState("");
   const [detail, setDetail] = useState(null);
   const [receiptOrder, setReceiptOrder] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const customersById = Object.fromEntries(data.customers.map((c) => [c.id, c]));
-  const filteredProducts = data.products.filter((p) => !productQuery || p.name.toLowerCase().includes(productQuery.toLowerCase()) || p.sku.toLowerCase().includes(productQuery.toLowerCase()));
 
   const resetCustomerFields = () => { setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setCustomerEmail(""); setCustomerTaxId(""); };
   const selectExistingCustomer = (c) => {
@@ -1242,6 +1316,7 @@ function OrdersPage({ data, actions, shopInfo }) {
       if (existing) return c.map((i) => i === existing ? { ...i, qty: Math.min(i.qty + 1, avail) } : i);
       return [...c, { productId: p.id, variantId, sku, name, price, cost: estCost, qty: 1, imageUrl: p.imageUrl, avail }];
     });
+    actions.notify(`เพิ่ม "${name}" แล้ว`);
   };
   const updateQty = (idx, qty, avail) => setCart((c) => c.map((i, ix) => ix === idx ? { ...i, qty: Math.max(1, Math.min(Number(qty) || 1, avail)) } : i));
   const removeFromCart = (idx) => setCart((c) => c.filter((_, ix) => ix !== idx));
@@ -1273,7 +1348,8 @@ function OrdersPage({ data, actions, shopInfo }) {
       items: cart.map(({ avail, ...rest }) => rest), discount: Number(discount || 0), shippingFee: Number(shippingFee || 0),
       status, note: "",
     });
-    setCart([]); setDiscount(0); setShippingFee(40); setChannel(""); resetCustomerFields(); setTab("list");
+    actions.notify(status === "pending" ? "บันทึกออเดอร์ไว้ก่อนแล้ว" : "ปิดรายการเรียบร้อยแล้ว");
+    setCart([]); setDiscount(0); setShippingFee(0); setChannel(""); resetCustomerFields(); setTab("list");
   };
 
   const orders = [...data.orders].sort((a, b) => new Date(b.date) - new Date(a.date))
@@ -1290,54 +1366,21 @@ function OrdersPage({ data, actions, shopInfo }) {
       </div>
 
       {tab === "new" ? (
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-          <Card className="p-4 lg:col-span-3">
-            <SearchBox value={productQuery} onChange={setProductQuery} placeholder="ค้นหาสินค้าเพื่อเพิ่มลงออเดอร์..." />
-            <div className="flex flex-col gap-2.5 mt-4 max-h-[500px] overflow-y-auto pr-1">
-              {filteredProducts.map((p) => {
-                const mainAvail = stockOf(p, null);
-                return (
-                  <div key={p.id} className="p-3 rounded-xl" style={{ border: `1px solid ${C.border}` }}>
-                    <button onClick={() => addToCart(p)} disabled={mainAvail <= 0 || (p.variants || []).length > 0}
-                      className="flex gap-3 items-center w-full text-left disabled:cursor-default">
-                      <Thumb src={p.imageUrl} size={44} />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-semibold truncate" style={{ color: C.text }}>{p.name}</div>
-                        <div className="text-xs mt-0.5" style={{ color: C.sub }}>{p.sku} · คงเหลือ {mainAvail}</div>
-                        <div className="mono text-sm font-bold mt-1" style={{ color: C.accent }}>{money(p.sellPrice)}</div>
-                      </div>
-                      {(p.variants || []).length === 0 && <Plus size={16} style={{ color: C.accent }} />}
-                    </button>
-                    {(p.variants || []).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-2.5 pt-2.5" style={{ borderTop: `1px dashed ${C.border}` }}>
-                        {p.variants.map((v) => {
-                          const vAvail = stockOf(p, v.id);
-                          return (
-                            <button key={v.id} onClick={() => addToCart(p, v)} disabled={vAvail <= 0}
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
-                              style={{ background: C.accentSoft, color: C.accentDark, border: `1px solid ${C.accentSoft}` }}>
-                              {v.name} · {money(v.sellPrice)} · เหลือ {vAvail}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+        <div className="max-w-2xl">
+         <CollapseCard title="รายละเอียดออเดอร์" defaultOpen={false}>
+            <div className="grid grid-cols-2 gap-x-3">
+              <Field label="ส่วนลด (บาท)"><Input type="number" min="0" value={discount} onChange={(e) => setDiscount(e.target.value)} /></Field>
+              <Field label="ค่าจัดส่ง (บาท)"><Input type="number" min="0" value={shippingFee} onChange={(e) => setShippingFee(e.target.value)} /></Field>
             </div>
-          </Card>
+          </CollapseCard>
 
-          <Card className="p-4 lg:col-span-2 h-fit">
-            <div className="font-bold text-sm mb-3" style={{ color: C.text }}>ตะกร้าออเดอร์</div>
-
+          <CollapseCard title="รายละเอียดลูกค้า" defaultOpen={true}>
             <Field label="ช่องทางการขาย">
               <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
                 <option value="">ไม่ระบุ</option>
                 {CHANNELS.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
               </Select>
             </Field>
-
             <Field label="ชื่อลูกค้า">
               <NameAutocomplete value={customerName} onChange={setCustomerName} onSelect={selectExistingCustomer}
                 options={data.customers} placeholder="พิมพ์ชื่อลูกค้า (เว้นว่างได้ถ้าเป็นลูกค้าทั่วไป)" />
@@ -1348,38 +1391,55 @@ function OrdersPage({ data, actions, shopInfo }) {
             </div>
             <Field label="ที่อยู่"><TextArea rows={2} value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} /></Field>
             <Field label="เลขประจำตัวผู้เสียภาษี"><Input value={customerTaxId} onChange={(e) => setCustomerTaxId(e.target.value)} /></Field>
+          </CollapseCard>
 
-            <div className="flex flex-col gap-2 mb-3 max-h-[220px] overflow-y-auto mt-1">
-              {cart.length === 0 ? <EmptyState text="ยังไม่มีสินค้าในตะกร้า" /> : cart.map((i, idx) => (
+          <Card className="p-4 mb-24">
+            <div className="font-bold text-sm mb-3" style={{ color: C.text }}>รายละเอียดสินค้า</div>
+            <div className="flex flex-col gap-2 mb-3">
+              {cart.length === 0 ? (
+                <div className="py-10 text-center text-sm" style={{ color: C.faint }}>
+                  ยังไม่มีสินค้า — กดปุ่มตะกร้าด้านล่างขวาเพื่อเพิ่มสินค้า
+                </div>
+              ) : cart.map((i, idx) => (
                 <div key={idx} className="flex items-center gap-2 p-2 rounded-xl" style={{ background: C.bg }}>
-                  <Thumb src={i.imageUrl} size={32} />
+                  <Thumb src={i.imageUrl} size={36} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold truncate" style={{ color: C.text }}>{i.name}</div>
+                    <div className="text-sm font-semibold truncate" style={{ color: C.text }}>{i.name}</div>
                     <div className="mono text-xs" style={{ color: C.sub }}>{money(i.price)}</div>
                   </div>
-                  <Input type="number" min="1" max={i.avail} value={i.qty} onChange={(e) => updateQty(idx, e.target.value, i.avail)} style={{ width: 56, padding: "5px 6px", textAlign: "center" }} />
+                  <Input type="number" min="1" max={i.avail} value={i.qty} onChange={(e) => updateQty(idx, e.target.value, i.avail)} style={{ width: 60, padding: "6px 8px", textAlign: "center" }} />
                   <IconBtn icon={X} tone="danger" onClick={() => removeFromCart(idx)} />
                 </div>
               ))}
             </div>
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              <Field label="ส่วนลด (บาท)"><Input type="number" min="0" value={discount} onChange={(e) => setDiscount(e.target.value)} /></Field>
-              <Field label="ค่าจัดส่ง (บาท)"><Input type="number" min="0" value={shippingFee} onChange={(e) => setShippingFee(e.target.value)} /></Field>
-            </div>
-            <div className="rounded-xl p-3 flex flex-col gap-1.5 mb-3" style={{ background: C.accentSoft }}>
-              <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ยอดรวมสินค้า</span><span className="mono">{money(subtotal)}</span></div>
-              <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ส่วนลด</span><span className="mono">-{money(discount)}</span></div>
-              <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ค่าจัดส่ง</span><span className="mono">+{money(shippingFee)}</span></div>
-              <div className="flex justify-between text-sm font-bold pt-1.5" style={{ color: C.accentDark, borderTop: `1px dashed ${C.accent}` }}><span>ยอดชำระสุทธิ</span><span className="mono">{money(total)}</span></div>
-              <div className="flex justify-between text-xs pt-1" style={{ color: C.sub }}><span>ต้นทุนโดยประมาณ</span><span className="mono">{money(estCostTotal)}</span></div>
-              <div className="flex justify-between text-xs font-bold" style={{ color: estProfit >= 0 ? C.success : C.danger }}><span>กำไรโดยประมาณ</span><span className="mono">{money(estProfit)}</span></div>
-              <div className="text-[11px]" style={{ color: C.faint }}>* ต้นทุนจริงคำนวณแบบ FIFO ตอนกดยืนยัน อาจต่างจากตัวเลขนี้เล็กน้อย</div>
-            </div>
+
+            {cart.length > 0 && (
+              <div className="rounded-xl p-3 flex flex-col gap-1.5 mb-4" style={{ background: C.accentSoft }}>
+                <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ยอดรวมสินค้า</span><span className="mono">{money(subtotal)}</span></div>
+                <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ส่วนลด</span><span className="mono">-{money(discount)}</span></div>
+                <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ค่าจัดส่ง</span><span className="mono">+{money(shippingFee)}</span></div>
+                <div className="flex justify-between text-sm font-bold pt-1.5" style={{ color: C.accentDark, borderTop: `1px dashed ${C.accent}` }}><span>ยอดชำระสุทธิ</span><span className="mono">{money(total)}</span></div>
+                <div className="flex justify-between text-xs pt-1" style={{ color: C.sub }}><span>ต้นทุนโดยประมาณ</span><span className="mono">{money(estCostTotal)}</span></div>
+                <div className="flex justify-between text-xs font-bold" style={{ color: estProfit >= 0 ? C.success : C.danger }}><span>กำไรโดยประมาณ</span><span className="mono">{money(estProfit)}</span></div>
+                <div className="text-[11px]" style={{ color: C.faint }}>* ต้นทุนจริงคำนวณแบบ FIFO ตอนกดยืนยัน อาจต่างจากตัวเลขนี้เล็กน้อย</div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2">
               <Btn variant="ghost" className="justify-center" onClick={() => submitOrder("pending")}>บันทึกก่อน</Btn>
               <Btn className="justify-center" onClick={() => submitOrder("closed")}>ปิดรายการ</Btn>
             </div>
           </Card>
+
+          <button onClick={() => setPickerOpen(true)}
+            className="fixed bottom-6 right-6 z-40 w-16 h-16 rounded-full flex items-center justify-center no-print"
+            style={{ background: C.accent, color: "#fff", boxShadow: "0 10px 24px rgba(29,79,196,0.4)" }}
+            title="เพิ่มสินค้า">
+            <ShoppingCart size={22} />
+            <Plus size={13} style={{ position: "absolute", top: 10, right: 10 }} />
+          </button>
+
+          <ProductSearchModal open={pickerOpen} onClose={() => setPickerOpen(false)} products={data.products} onPick={(p, v) => addToCart(p, v)} />
         </div>
       ) : (
         <Card className="p-4">
@@ -1424,7 +1484,7 @@ function OrdersPage({ data, actions, shopInfo }) {
       <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.orderNo} width={480}
         footer={detail && (
           <>
-            {detail.status === "pending" && <Btn onClick={() => { actions.updateOrderStatus(detail.id, "closed"); setDetail({ ...detail, status: "closed" }); }}>ปิดรายการ</Btn>}
+            {detail.status === "pending" && <Btn onClick={() => { actions.updateOrderStatus(detail.id, "closed"); actions.notify("ปิดรายการเรียบร้อยแล้ว"); setDetail({ ...detail, status: "closed" }); }}>ปิดรายการ</Btn>}
             <Btn variant="subtle" icon={Receipt} onClick={() => setReceiptOrder(detail)}>ออกใบเสร็จ/ใบเสนอราคา (A4)</Btn>
           </>
         )}>
@@ -1488,9 +1548,15 @@ function PartiesPage({ data, actions }) {
         </button>
       </div>
       {tab === "customers" ? (
-        <EntityTable title="ลูกค้า" columns={custCols} data={data.customers} searchKeys={["name", "phone", "email"]} onAdd={actions.addCustomer} onEdit={actions.editCustomer} onDelete={actions.deleteCustomer} />
+        <EntityTable title="ลูกค้า" columns={custCols} data={data.customers} searchKeys={["name", "phone", "email"]}
+          onAdd={(c) => { actions.addCustomer(c); actions.notify("เพิ่มลูกค้าแล้ว"); }}
+          onEdit={(c) => { actions.editCustomer(c); actions.notify("บันทึกลูกค้าแล้ว"); }}
+          onDelete={(id) => { actions.deleteCustomer(id); actions.notify("ลบลูกค้าแล้ว"); }} />
       ) : (
-        <EntityTable title="ผู้จำหน่าย" columns={supCols} data={data.suppliers} searchKeys={["name", "contact"]} onAdd={actions.addSupplier} onEdit={actions.editSupplier} onDelete={actions.deleteSupplier} />
+        <EntityTable title="ผู้จำหน่าย" columns={supCols} data={data.suppliers} searchKeys={["name", "contact"]}
+          onAdd={(s) => { actions.addSupplier(s); actions.notify("เพิ่มผู้จำหน่ายแล้ว"); }}
+          onEdit={(s) => { actions.editSupplier(s); actions.notify("บันทึกผู้จำหน่ายแล้ว"); }}
+          onDelete={(id) => { actions.deleteSupplier(id); actions.notify("ลบผู้จำหน่ายแล้ว"); }} />
       )}
     </div>
   );
@@ -1520,6 +1586,7 @@ function FinancePage({ data, actions }) {
   const submit = () => {
     if (!form.amount || Number(form.amount) <= 0) { alert("กรุณาระบุจำนวนเงินให้ถูกต้อง"); return; }
     actions.addFinance({ date: new Date().toISOString(), type: form.type, category: form.category, amount: Number(form.amount), note: form.note });
+    actions.notify("บันทึกรายการแล้ว");
     setForm({ type: "expense", category: EXPENSE_CATS[0], amount: "", note: "" });
   };
 
@@ -1757,6 +1824,13 @@ export default function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const saveTimer = useRef(null);
+  const [toastMsg, setToastMsg] = useState("");
+  const toastTimer = useRef(null);
+  const notify = (msg) => {
+    setToastMsg(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(""), 2000);
+  };
 
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("ims-unlocked") === "1");
   const [pwInput, setPwInput] = useState("");
@@ -1853,6 +1927,7 @@ export default function App() {
     updateOrderStatus: (id, status) => setData((d) => ({ ...d, orders: d.orders.map((o) => o.id === id ? { ...o, status } : o) })),
     addFinance: (f) => setData((d) => ({ ...d, financeEntries: [...d.financeEntries, { id: uid(), ...f }] })),
     updateShopInfo: (info) => setData((d) => ({ ...d, shopInfo: { ...d.shopInfo, ...info } })),
+    notify,
   };
 
   if (!unlocked) {
@@ -1897,7 +1972,8 @@ export default function App() {
           {page === "reports" && <ReportsPage data={data} />}
         </main>
       </div>
-      <ShopSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} shopInfo={data.shopInfo} onSave={actions.updateShopInfo} />
+      <ShopSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} shopInfo={data.shopInfo} onSave={(info) => { actions.updateShopInfo(info); notify("บันทึกข้อมูลร้านแล้ว"); }} />
+      <Toast message={toastMsg} />
     </div>
   );
 }
