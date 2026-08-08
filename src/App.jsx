@@ -1755,6 +1755,17 @@ function ReportsPage({ data }) {
     return rows.sort((a, b) => a.stock - b.stock);
   }, [data.products]);
 
+  const productProfit = useMemo(() => {
+    const map = new Map();
+    rangeOrders.forEach((o) => o.items.forEach((it) => {
+      const key = it.productId + "|" + (it.variantId || "");
+      const cur = map.get(key) || { sku: it.sku, name: it.name, imageUrl: it.imageUrl, qty: 0, revenue: 0, cost: 0 };
+      cur.qty += it.qty; cur.revenue += it.qty * it.price; cur.cost += it.qty * it.cost;
+      map.set(key, cur);
+    }));
+    return Array.from(map.values()).map((r) => ({ ...r, profit: r.revenue - r.cost, margin: r.revenue > 0 ? ((r.revenue - r.cost) / r.revenue) * 100 : 0 })).sort((a, b) => b.profit - a.profit);
+  }, [rangeOrders]);
+
   const exportExcel = (rows, filename) => {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -1767,6 +1778,8 @@ function ReportsPage({ data }) {
       exportExcel(rangeOrders.map((o) => { const t = orderTotals(o); return { เลขออเดอร์: o.orderNo, วันที่: fmtDate(o.date), ลูกค้า: customersById[o.customerId]?.name || "ลูกค้าทั่วไป", ช่องทาง: channelOf(o.channel)?.label || "-", ยอดรวม: t.total, ต้นทุน: t.cost, กำไร: t.profit }; }), `รายงานยอดขาย_${from}_${to}.xlsx`);
     } else if (reportTab === "bestseller") {
       exportExcel(bestSellers.map((b) => ({ รหัส: b.sku, สินค้า: b.name, จำนวนที่ขาย: b.qty, ยอดขาย: b.revenue })), `สินค้าขายดี_${from}_${to}.xlsx`);
+    } else if (reportTab === "profit") {
+      exportExcel(productProfit.map((p) => ({ รหัส: p.sku, สินค้า: p.name, จำนวนที่ขาย: p.qty, ยอดขาย: p.revenue, ต้นทุน: p.cost, กำไร: p.profit, "%กำไร": Math.round(p.margin * 10) / 10 })), `กำไรรายสินค้า_${from}_${to}.xlsx`);
     } else {
       exportExcel(stockList.map((p) => ({ รหัส: p.sku, สินค้า: p.name, คงเหลือ: p.stock, มูลค่ารวม: p.value })), `รายงานสต๊อกคงเหลือ.xlsx`);
     }
@@ -1780,7 +1793,7 @@ function ReportsPage({ data }) {
         actions={<><Btn variant="ghost" icon={Printer} onClick={() => window.print()}>Export PDF</Btn><Btn icon={FileSpreadsheet} onClick={doExportExcel}>Export Excel</Btn></>} />
 
       <div className="flex flex-wrap gap-2 mb-4 no-print">
-        {[{ k: "sales", l: "รายงานยอดขาย" }, { k: "bestseller", l: "สินค้าขายดี" }, { k: "stock", l: "สต๊อกคงเหลือ" }].map((t) => (
+        {[{ k: "sales", l: "รายงานยอดขาย" }, { k: "bestseller", l: "สินค้าขายดี" }, { k: "profit", l: "กำไรรายสินค้า" }, { k: "stock", l: "สต๊อกคงเหลือ" }].map((t) => (
           <button key={t.k} onClick={() => setReportTab(t.k)} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: reportTab === t.k ? C.accent : "#fff", color: reportTab === t.k ? "#fff" : C.sub, border: `1px solid ${reportTab === t.k ? C.accent : C.border}` }}>{t.l}</button>
         ))}
         {reportTab !== "stock" && (
@@ -1848,6 +1861,38 @@ function ReportsPage({ data }) {
               </tbody>
             </table>
             {bestSellers.length === 0 && <EmptyState text="ไม่มีข้อมูลในช่วงเวลานี้" />}
+          </div>
+        )}
+        {reportTab === "profit" && (
+          <div className="overflow-x-auto">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+              <StatCard label="ยอดขายรวม" value={money(productProfit.reduce((s, p) => s + p.revenue, 0))} tone="default" />
+              <StatCard label="ต้นทุนรวม" value={money(productProfit.reduce((s, p) => s + p.cost, 0))} tone="warning" />
+              <StatCard label="กำไรรวม" value={money(productProfit.reduce((s, p) => s + p.profit, 0))} tone="success" />
+            </div>
+            <table className="w-full text-sm">
+              <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                <th className="text-left py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>สินค้า</th>
+                <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>จำนวนที่ขาย</th>
+                <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>ยอดขาย</th>
+                <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>ต้นทุน</th>
+                <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>กำไร</th>
+                <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>% กำไร</th>
+              </tr></thead>
+              <tbody>
+                {productProfit.map((p, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td className="py-2 px-2 flex items-center gap-2"><Thumb src={p.imageUrl} size={24} />{p.name}</td>
+                    <td className="py-2 px-2 text-right mono">{num(p.qty)}</td>
+                    <td className="py-2 px-2 text-right mono">{money(p.revenue)}</td>
+                    <td className="py-2 px-2 text-right mono" style={{ color: C.sub }}>{money(p.cost)}</td>
+                    <td className="py-2 px-2 text-right mono font-semibold" style={{ color: p.profit >= 0 ? C.success : C.danger }}>{money(p.profit)}</td>
+                    <td className="py-2 px-2 text-right mono" style={{ color: p.profit >= 0 ? C.success : C.danger }}>{p.margin.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {productProfit.length === 0 && <EmptyState text="ไม่มีข้อมูลในช่วงเวลานี้" />}
           </div>
         )}
         {reportTab === "stock" && (
