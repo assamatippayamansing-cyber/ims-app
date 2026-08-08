@@ -899,12 +899,9 @@ function Sidebar({ page, setPage, open, setOpen, onReset, onOpenSettings }) {
             );
           })}
         </nav>
-        <div className="px-3 py-4 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.sidebarLine}` }}>
+    <div className="px-3 py-4 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.sidebarLine}` }}>
           <button onClick={onOpenSettings} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#B8C4E0" }}>
             <Receipt size={16} /> ข้อมูลร้านค้า
-          </button>
-          <button onClick={onReset} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#7C8CB0" }}>
-            <RotateCcw size={16} /> ล้างข้อมูลทั้งหมด
           </button>
         </div>
       </aside>
