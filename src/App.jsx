@@ -65,7 +65,7 @@ const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
 const MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
-const SITE_PASSWORD = "1234"; // เปลี่ยนเป็นรหัสที่ต้องการ
+const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 const CHANNELS = [
   { key: "line", label: "LINE", color: "#06C755" },
@@ -168,6 +168,11 @@ const avgCostOf = (p, variantId) => {
 };
 const productTotalStock = (p) => productLots(p).reduce((s, l) => s + l.qty, 0);
 const productStockValue = (p) => productLots(p).reduce((s, l) => s + l.qty * l.costPrice, 0);
+const productRetailValue = (p) => {
+  let val = stockOf(p, null) * p.sellPrice;
+  (p.variants || []).forEach((v) => { val += stockOf(p, v.id) * v.sellPrice; });
+  return val;
+};
 
 // Consumes `qty` units FIFO (oldest lot first) from a product's lots for a given variant.
 // Returns { lots: newLotsArray, cost: totalCostConsumed, shortfall: unfulfilledQty }
@@ -1029,8 +1034,9 @@ function Dashboard({ data }) {
     let sales = 0, cost = 0, profit = 0;
     inRange.forEach((o) => { const t = orderTotals(o); sales += t.total; cost += t.cost; profit += t.profit; });
     const expenseInRange = data.financeEntries.filter((f) => new Date(f.date) >= cutoff && f.type === "expense").reduce((s, f) => s + f.amount, 0);
-    const stockValue = data.products.reduce((s, p) => s + productStockValue(p), 0);
-    return { sales, cost, netProfit: profit - expenseInRange, orderCount: inRange.length, stockValue, revenue: sales };
+    const stockValue = data.products.reduce((s, p) => s + productRetailValue(p), 0);
+    const stockCost = data.products.reduce((s, p) => s + productStockValue(p), 0);
+    return { sales, cost, netProfit: profit - expenseInRange, orderCount: inRange.length, stockValue, stockCost, revenue: sales };
   }, [inRange, data, cutoff]);
 
   const categoryBreakdown = useMemo(() => {
@@ -1065,13 +1071,14 @@ function Dashboard({ data }) {
           </div>
         } />
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3 mb-5">
         <StatCard label="ยอดขาย" value={money(totals.sales)} sub={gran === "day" ? "30 วันล่าสุด" : gran === "month" ? "12 เดือนล่าสุด" : "5 ปีล่าสุด"} icon={TrendingUp} tone="default" />
         <StatCard label="รายรับรวม" value={money(totals.revenue)} icon={Wallet} tone="success" />
         <StatCard label="ต้นทุนขาย" value={money(totals.cost)} icon={Package} tone="warning" />
         <StatCard label="กำไรสุทธิ" value={money(totals.netProfit)} icon={totals.netProfit >= 0 ? TrendingUp : TrendingDown} tone={totals.netProfit >= 0 ? "success" : "danger"} />
         <StatCard label="จำนวนออเดอร์" value={num(totals.orderCount)} icon={ShoppingCart} tone="default" />
-        <StatCard label="มูลค่าสต๊อกคงเหลือ" value={money(totals.stockValue)} icon={Package} tone="default" sub="รวมทุกล็อต" />
+        <StatCard label="มูลค่าสต๊อกคงเหลือ" value={money(totals.stockValue)} icon={Package} tone="default" sub="คิดที่ราคาขาย" />
+        <StatCard label="ต้นทุนสต๊อกรวม" value={money(totals.stockCost)} icon={Package} tone="warning" sub="คิดที่ต้นทุนจริง (FIFO)" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
@@ -1280,6 +1287,7 @@ function ProductSearchModal({ open, onClose, products, onPick }) {
 }
 
 /* ============================== ORDERS PAGE ============================== */
+/* ============================== ORDERS PAGE ============================== */
 function OrdersPage({ data, actions, shopInfo }) {
   const [tab, setTab] = useState("list");
   const [cart, setCart] = useState([]);
@@ -1295,10 +1303,15 @@ function OrdersPage({ data, actions, shopInfo }) {
   const [detail, setDetail] = useState(null);
   const [receiptOrder, setReceiptOrder] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(null);
 
   const customersById = Object.fromEntries(data.customers.map((c) => [c.id, c]));
+  const productsById = Object.fromEntries(data.products.map((p) => [p.id, p]));
 
-  const resetCustomerFields = () => { setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setCustomerEmail(""); setCustomerTaxId(""); };
+  const resetForm = () => {
+    setCart([]); setDiscount(0); setShippingFee(0); setChannel(""); setEditingOrder(null);
+    setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setCustomerEmail(""); setCustomerTaxId("");
+  };
   const selectExistingCustomer = (c) => {
     setCustomerName(c.name); setCustomerPhone(c.phone || ""); setCustomerAddress(c.address || ""); setCustomerEmail(c.email || ""); setCustomerTaxId(c.taxId || "");
   };
@@ -1342,14 +1355,49 @@ function OrdersPage({ data, actions, shopInfo }) {
   const submitOrder = (status) => {
     if (cart.length === 0) { alert("กรุณาเลือกสินค้าอย่างน้อย 1 รายการ"); return; }
     const customerId = resolveCustomerId();
-    actions.addOrder({
-      orderNo: "ORD-" + String(data.orders.length + 1).padStart(5, "0"),
-      date: new Date().toISOString(), customerId, channel: channel || null,
+    const payload = {
+      customerId, channel: channel || null,
       items: cart.map(({ avail, ...rest }) => rest), discount: Number(discount || 0), shippingFee: Number(shippingFee || 0),
       status, note: "",
-    });
-    actions.notify(status === "pending" ? "บันทึกออเดอร์ไว้ก่อนแล้ว" : "ปิดรายการเรียบร้อยแล้ว");
-    setCart([]); setDiscount(0); setShippingFee(0); setChannel(""); resetCustomerFields(); setTab("list");
+    };
+    if (editingOrder) {
+      actions.updateOrder(editingOrder.id, { ...payload, orderNo: editingOrder.orderNo, date: editingOrder.date });
+      actions.notify("แก้ไขออเดอร์เรียบร้อยแล้ว");
+    } else {
+      actions.addOrder({ orderNo: "ORD-" + String(data.orders.length + 1).padStart(5, "0"), date: new Date().toISOString(), ...payload });
+      actions.notify(status === "pending" ? "บันทึกออเดอร์ไว้ก่อนแล้ว" : "ปิดรายการเรียบร้อยแล้ว");
+    }
+    resetForm();
+    setTab("list");
+  };
+
+  const startEditOrder = (order) => {
+    actions.reverseOrderStock(order);
+    const cust = customersById[order.customerId];
+    if (cust) selectExistingCustomer(cust); else { setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setCustomerEmail(""); setCustomerTaxId(""); }
+    setChannel(order.channel || "");
+    setDiscount(order.discount || 0);
+    setShippingFee(order.shippingFee || 0);
+    setCart(order.items.map((it) => {
+      const p = productsById[it.productId];
+      const avail = (p ? stockOf(p, it.variantId) : 0) + it.qty;
+      return { ...it, avail };
+    }));
+    setEditingOrder(order);
+    setDetail(null);
+    setTab("new");
+  };
+
+  const cancelEditOrder = () => {
+    if (editingOrder) actions.restoreOrderStock(editingOrder);
+    resetForm();
+    actions.notify("ยกเลิกการแก้ไขแล้ว");
+    setTab("list");
+  };
+
+  const goToListTab = () => {
+    if (editingOrder) cancelEditOrder();
+    else setTab("list");
   };
 
   const orders = [...data.orders].sort((a, b) => new Date(b.date) - new Date(a.date))
@@ -1358,22 +1406,15 @@ function OrdersPage({ data, actions, shopInfo }) {
   return (
     <div>
       <PageHeader title="ระบบออเดอร์" subtitle="สร้างออเดอร์ คำนวณยอดอัตโนมัติ และตัดสต๊อกแบบ FIFO ทันที"
-        actions={<Btn icon={Plus} onClick={() => setTab("new")}>สร้างออเดอร์ใหม่</Btn>} />
+        actions={<Btn icon={Plus} onClick={() => { resetForm(); setTab("new"); }}>สร้างออเดอร์ใหม่</Btn>} />
 
       <div className="flex gap-2 mb-4">
-        <button onClick={() => setTab("list")} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: tab === "list" ? C.accent : "#fff", color: tab === "list" ? "#fff" : C.sub, border: `1px solid ${tab === "list" ? C.accent : C.border}` }}>รายการออเดอร์</button>
-        <button onClick={() => setTab("new")} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: tab === "new" ? C.accent : "#fff", color: tab === "new" ? "#fff" : C.sub, border: `1px solid ${tab === "new" ? C.accent : C.border}` }}>คีย์ออเดอร์ใหม่</button>
+        <button onClick={goToListTab} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: tab === "list" ? C.accent : "#fff", color: tab === "list" ? "#fff" : C.sub, border: `1px solid ${tab === "list" ? C.accent : C.border}` }}>รายการออเดอร์</button>
+        <button onClick={() => setTab("new")} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: tab === "new" ? C.accent : "#fff", color: tab === "new" ? "#fff" : C.sub, border: `1px solid ${tab === "new" ? C.accent : C.border}` }}>{editingOrder ? `แก้ไข ${editingOrder.orderNo}` : "คีย์ออเดอร์ใหม่"}</button>
       </div>
 
       {tab === "new" ? (
         <div className="max-w-2xl">
-         <CollapseCard title="รายละเอียดออเดอร์" defaultOpen={false}>
-            <div className="grid grid-cols-2 gap-x-3">
-              <Field label="ส่วนลด (บาท)"><Input type="number" min="0" value={discount} onChange={(e) => setDiscount(e.target.value)} /></Field>
-              <Field label="ค่าจัดส่ง (บาท)"><Input type="number" min="0" value={shippingFee} onChange={(e) => setShippingFee(e.target.value)} /></Field>
-            </div>
-          </CollapseCard>
-
           <CollapseCard title="รายละเอียดลูกค้า" defaultOpen={true}>
             <Field label="ช่องทางการขาย">
               <Select value={channel} onChange={(e) => setChannel(e.target.value)}>
@@ -1413,6 +1454,11 @@ function OrdersPage({ data, actions, shopInfo }) {
               ))}
             </div>
 
+            <div className="grid grid-cols-2 gap-x-3 mb-3">
+              <Field label="ส่วนลด (บาท)"><Input type="number" min="0" value={discount} onChange={(e) => setDiscount(e.target.value)} /></Field>
+              <Field label="ค่าจัดส่ง (บาท)"><Input type="number" min="0" value={shippingFee} onChange={(e) => setShippingFee(e.target.value)} /></Field>
+            </div>
+
             {cart.length > 0 && (
               <div className="rounded-xl p-3 flex flex-col gap-1.5 mb-4" style={{ background: C.accentSoft }}>
                 <div className="flex justify-between text-xs" style={{ color: C.sub }}><span>ยอดรวมสินค้า</span><span className="mono">{money(subtotal)}</span></div>
@@ -1425,6 +1471,7 @@ function OrdersPage({ data, actions, shopInfo }) {
               </div>
             )}
 
+            {editingOrder && <Btn variant="ghost" className="w-full justify-center mb-2" onClick={cancelEditOrder}>ยกเลิกการแก้ไข</Btn>}
             <div className="grid grid-cols-2 gap-2">
               <Btn variant="ghost" className="justify-center" onClick={() => submitOrder("pending")}>บันทึกก่อน</Btn>
               <Btn className="justify-center" onClick={() => submitOrder("closed")}>ปิดรายการ</Btn>
@@ -1485,6 +1532,7 @@ function OrdersPage({ data, actions, shopInfo }) {
         footer={detail && (
           <>
             {detail.status === "pending" && <Btn onClick={() => { actions.updateOrderStatus(detail.id, "closed"); actions.notify("ปิดรายการเรียบร้อยแล้ว"); setDetail({ ...detail, status: "closed" }); }}>ปิดรายการ</Btn>}
+            <Btn variant="ghost" icon={Pencil} onClick={() => startEditOrder(detail)}>แก้ไขออเดอร์</Btn>
             <Btn variant="subtle" icon={Receipt} onClick={() => setReceiptOrder(detail)}>ออกใบเสร็จ/ใบเสนอราคา (A4)</Btn>
           </>
         )}>
@@ -1925,6 +1973,59 @@ export default function App() {
     }),
 
     updateOrderStatus: (id, status) => setData((d) => ({ ...d, orders: d.orders.map((o) => o.id === id ? { ...o, status } : o) })),
+
+    // Returns an order's items back into stock as fresh lots (used when starting to edit an order)
+    reverseOrderStock: (order) => setData((d) => {
+      const moves = [];
+      const products = d.products.map((p) => {
+        const items = order.items.filter((i) => i.productId === p.id);
+        if (items.length === 0) return p;
+        const newLots = [...(p.lots || [])];
+        items.forEach((it) => {
+          newLots.push({ id: uid(), variantId: it.variantId || null, qty: it.qty, costPrice: it.cost, supplierId: null, date: order.date, note: `คืนสต๊อกจากการแก้ไขออเดอร์ ${order.orderNo}` });
+          moves.push({ id: uid(), productId: p.id, variantId: it.variantId || null, type: "in", qty: it.qty, costPrice: it.cost, supplierId: null, date: new Date().toISOString(), note: `คืนสต๊อกจากการแก้ไขออเดอร์ ${order.orderNo}`, refOrderId: order.id });
+        });
+        return { ...p, lots: newLots };
+      });
+      return { ...d, products, stockMoves: [...d.stockMoves, ...moves] };
+    }),
+
+    // Re-deducts an order's original items (used when the edit is cancelled, to restore the pre-edit state)
+    restoreOrderStock: (order) => setData((d) => {
+      const moves = [];
+      const products = d.products.map((p) => {
+        const items = order.items.filter((i) => i.productId === p.id);
+        if (items.length === 0) return p;
+        let currentLots = p.lots || [];
+        items.forEach((it) => {
+          const { lots: newLots, cost } = deductFIFO(currentLots, it.variantId || null, it.qty);
+          currentLots = newLots;
+          moves.push({ id: uid(), productId: p.id, variantId: it.variantId || null, type: "out", qty: it.qty, cost, date: new Date().toISOString(), note: `ยกเลิกแก้ไข - คืนสถานะออเดอร์ ${order.orderNo}`, refOrderId: order.id });
+        });
+        return { ...p, lots: currentLots };
+      });
+      return { ...d, products, stockMoves: [...d.stockMoves, ...moves] };
+    }),
+
+    // Applies edited order fields: FIFO-deducts the (possibly changed) item list and replaces the order in place
+    updateOrder: (orderId, patch) => setData((d) => {
+      const moves = [];
+      const items = patch.items.map((it) => ({ ...it }));
+      const products = d.products.map((p) => {
+        const pItems = items.filter((i) => i.productId === p.id);
+        if (pItems.length === 0) return p;
+        let currentLots = p.lots || [];
+        pItems.forEach((it) => {
+          const { lots: newLots, cost } = deductFIFO(currentLots, it.variantId || null, it.qty);
+          currentLots = newLots;
+          it.cost = it.qty > 0 ? Math.round((cost / it.qty) * 100) / 100 : 0;
+          moves.push({ id: uid(), productId: p.id, variantId: it.variantId || null, type: "out", qty: it.qty, cost, date: new Date().toISOString(), note: `ตัดสต๊อกจากการแก้ไขออเดอร์ ${patch.orderNo}`, refOrderId: orderId });
+        });
+        return { ...p, lots: currentLots };
+      });
+      const orders = d.orders.map((o) => o.id === orderId ? { ...o, ...patch, items } : o);
+      return { ...d, products, orders, stockMoves: [...d.stockMoves, ...moves] };
+    }),
     addFinance: (f) => setData((d) => ({ ...d, financeEntries: [...d.financeEntries, { id: uid(), ...f }] })),
     updateShopInfo: (info) => setData((d) => ({ ...d, shopInfo: { ...d.shopInfo, ...info } })),
     notify,
