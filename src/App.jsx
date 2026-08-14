@@ -65,7 +65,7 @@ const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
 const MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
-const SITE_PASSWORD = "1234"; // เปลี่ยนเป็นรหัสที่ต้องการ
+const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 const CHANNELS = [
   { key: "line", label: "LINE", color: "#06C755" },
