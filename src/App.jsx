@@ -486,12 +486,49 @@ function EntityTable({ title, columns, data, onAdd, onEdit, onDelete, searchKeys
 }
 
 /* ============================== PRODUCT MODAL (basic info + variants; stock is handled via lots, not here) ============================== */
+/* ============================== CATEGORY MANAGE MODAL ============================== */
+function CategoryManageModal({ open, onClose, categories, products, onAdd, onDelete }) {
+  const [newCat, setNewCat] = useState("");
+  const [delCat, setDelCat] = useState(null);
+  const countFor = (cat) => products.filter((p) => p.category === cat).length;
+  const submitAdd = () => {
+    const name = newCat.trim();
+    if (!name) return;
+    onAdd(name);
+    setNewCat("");
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="จัดการหมวดหมู่สินค้า" width={440}>
+      <div className="flex gap-2 mb-4">
+        <Input placeholder="เพิ่มหมวดหมู่ใหม่" value={newCat} onChange={(e) => setNewCat(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitAdd(); }} />
+        <Btn onClick={submitAdd}>เพิ่ม</Btn>
+      </div>
+      <div className="flex flex-col gap-2">
+        {categories.map((c) => (
+          <div key={c} className="flex items-center justify-between px-3 py-2.5 rounded-xl" style={{ background: C.bg }}>
+            <div>
+              <div className="text-sm font-semibold" style={{ color: C.text }}>{c}</div>
+              <div className="text-xs" style={{ color: C.sub }}>{countFor(c)} สินค้าใช้หมวดหมู่นี้</div>
+            </div>
+            <IconBtn icon={Trash2} tone="danger" title="ลบหมวดหมู่" onClick={() => setDelCat(c)} />
+          </div>
+        ))}
+        {categories.length === 0 && <EmptyState text="ยังไม่มีหมวดหมู่" />}
+      </div>
+      <ConfirmDialog open={!!delCat} onCancel={() => setDelCat(null)}
+        message={`ต้องการลบหมวดหมู่ "${delCat}" ใช่หรือไม่? (สินค้าที่ใช้หมวดหมู่นี้อยู่จะยังคงแสดงชื่อหมวดหมู่เดิมไว้ แต่จะไม่มีในตัวเลือกให้สินค้าใหม่)`}
+        onConfirm={() => { onDelete(delCat); setDelCat(null); }} />
+    </Modal>
+  );
+}
+
 function ProductModal({ open, onClose, initial, onSave, categories, onAddCategory }) {
   const isEdit = !!(initial && initial.id);
   const blank = { sku: "", name: "", category: "", costPrice: "", sellPrice: "", imageUrl: "", variants: [] };
   const [form, setForm] = useState(blank);
   const [newCat, setNewCat] = useState("");
   const [addingCat, setAddingCat] = useState(false);
+  const [delVariant, setDelVariant] = useState(null);
   useEffect(() => { setForm(initial ? { ...blank, ...initial, variants: (initial.variants || []).map((v) => ({ ...v })) } : blank); setAddingCat(false); setNewCat(""); }, [initial, open]);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -572,7 +609,7 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
               <div key={v.id} className="p-2.5 rounded-xl flex flex-col gap-2" style={{ background: C.bg }}>
                 <div className="flex items-center justify-between gap-2">
                   <ImageField value={v.imageUrl} onChange={(val) => updateVariant(v.id, "imageUrl", val)} />
-                  <IconBtn icon={X} tone="danger" title="ลบสินค้าย่อย" onClick={() => removeVariant(v.id)} />
+                  <IconBtn icon={X} tone="danger" title="ลบสินค้าย่อย" onClick={() => setDelVariant(v)} />
                 </div>
                 <div className="grid gap-2 items-center" style={{ gridTemplateColumns: "1fr 1fr 100px" }}>
                   <Input placeholder="รหัสสินค้าย่อย" value={v.sku} onChange={(e) => updateVariant(v.id, "sku", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
@@ -584,6 +621,9 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
           </div>
         )}
       </div>
+      <ConfirmDialog open={!!delVariant} onCancel={() => setDelVariant(null)}
+        message={`ต้องการลบสินค้าย่อย "${delVariant?.name || delVariant?.sku || ""}" ใช่หรือไม่?`}
+        onConfirm={() => { removeVariant(delVariant.id); setDelVariant(null); }} />
     </Modal>
   );
 }
@@ -1163,17 +1203,53 @@ function ProductsPage({ data, actions }) {
   const [del, setDel] = useState(null);
   const [stockTarget, setStockTarget] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
+  const [sortBy, setSortBy] = useState("default");
+  const [catModalOpen, setCatModalOpen] = useState(false);
 
   const toggleExpand = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const filtered = data.products.filter((p) => !q || [p.sku, p.name, p.category].some((v) => v.toLowerCase().includes(q.toLowerCase())));
+
+  const soldQtyByProduct = useMemo(() => {
+    const map = new Map();
+    data.orders.filter((o) => o.status === "closed").forEach((o) => o.items.forEach((it) => {
+      map.set(it.productId, (map.get(it.productId) || 0) + it.qty);
+    }));
+    return map;
+  }, [data.orders]);
+
+  const filtered = useMemo(() => {
+    let rows = data.products.filter((p) => !q || [p.sku, p.name, p.category].some((v) => v.toLowerCase().includes(q.toLowerCase())));
+    const byPrice = (p) => p.sellPrice;
+    const byStock = (p) => productTotalStock(p);
+    const byCreated = (p) => new Date(p.createdAt || 0).getTime();
+    const bySold = (p) => soldQtyByProduct.get(p.id) || 0;
+    if (sortBy === "stock_desc") rows = [...rows].sort((a, b) => byStock(b) - byStock(a));
+    else if (sortBy === "created_desc") rows = [...rows].sort((a, b) => byCreated(b) - byCreated(a));
+    else if (sortBy === "price_desc") rows = [...rows].sort((a, b) => byPrice(b) - byPrice(a));
+    else if (sortBy === "price_asc") rows = [...rows].sort((a, b) => byPrice(a) - byPrice(b));
+    else if (sortBy === "bestseller") rows = [...rows].sort((a, b) => bySold(b) - bySold(a));
+    return rows;
+  }, [data.products, q, sortBy, soldQtyByProduct]);
 
   return (
     <div>
       <PageHeader title="สินค้าและสต๊อก" subtitle={`ทั้งหมด ${data.products.length} รายการ — รับเข้า/ตัดสต๊อกแบบ FIFO แยกต้นทุนตามล็อต`}
-        actions={<Btn icon={Plus} onClick={() => setModal({})}>เพิ่มสินค้า</Btn>} />
+        actions={<>
+          <Btn variant="ghost" icon={Layers} onClick={() => setCatModalOpen(true)}>จัดการหมวดหมู่</Btn>
+          <Btn icon={Plus} onClick={() => setModal({})}>เพิ่มสินค้า</Btn>
+        </>} />
 
       <Card className="p-4">
-        <SearchBox value={q} onChange={setQ} placeholder="ค้นหาสินค้า..." />
+        <div className="flex flex-wrap items-center gap-3">
+          <SearchBox value={q} onChange={setQ} placeholder="ค้นหาสินค้า..." />
+          <Select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ width: 200 }}>
+            <option value="default">เรียงตามค่าเริ่มต้น</option>
+            <option value="stock_desc">จำนวนสต๊อก (มาก→น้อย)</option>
+            <option value="created_desc">วันที่สร้าง (ใหม่→เก่า)</option>
+            <option value="price_desc">ราคาสูง→ต่ำ</option>
+            <option value="price_asc">ราคาต่ำ→สูง</option>
+            <option value="bestseller">สินค้าขายดี</option>
+          </Select>
+        </div>
         <div className="overflow-x-auto mt-4">
           <table className="w-full text-sm">
             <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -1257,6 +1333,9 @@ function ProductsPage({ data, actions }) {
         onSubmit={(payload) => { actions.addStockMove(payload); actions.notify(payload.type === "in" ? "รับสินค้าเข้าแล้ว" : "ตัดสต๊อกแล้ว"); }} />
       <ConfirmDialog open={!!del} onCancel={() => setDel(null)} message={`ต้องการลบ "${del?.name || ""}" ใช่หรือไม่? (รวมสินค้าย่อยทั้งหมด)`}
         onConfirm={() => { actions.deleteProduct(del.id); actions.notify("ลบสินค้าแล้ว"); setDel(null); }} />
+      <CategoryManageModal open={catModalOpen} onClose={() => setCatModalOpen(false)} categories={data.categories} products={data.products}
+        onAdd={(name) => { actions.addCategory(name); actions.notify("เพิ่มหมวดหมู่แล้ว"); }}
+        onDelete={(name) => { actions.deleteCategory(name); actions.notify("ลบหมวดหมู่แล้ว"); }} />
     </div>
   );
 }
@@ -1327,6 +1406,7 @@ function OrdersPage({ data, actions, shopInfo }) {
   const [receiptOrder, setReceiptOrder] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
+  const [delCartIdx, setDelCartIdx] = useState(null);
   const [showClosed, setShowClosed] = useState(false);
 
   const customersById = Object.fromEntries(data.customers.map((c) => [c.id, c]));
@@ -1476,7 +1556,7 @@ function OrdersPage({ data, actions, shopInfo }) {
                     <div className="mono text-xs" style={{ color: C.sub }}>{money(i.price)}</div>
                   </div>
                   <Input type="number" min="1" max={i.avail} value={i.qty} onChange={(e) => updateQty(idx, e.target.value, i.avail)} style={{ width: 60, padding: "6px 8px", textAlign: "center" }} />
-                  <IconBtn icon={X} tone="danger" onClick={() => removeFromCart(idx)} />
+                  <IconBtn icon={X} tone="danger" onClick={() => setDelCartIdx(idx)} />
                 </div>
               ))}
             </div>
@@ -1514,6 +1594,8 @@ function OrdersPage({ data, actions, shopInfo }) {
           </button>
 
           <ProductSearchModal open={pickerOpen} onClose={() => setPickerOpen(false)} products={data.products} onPick={(p, v) => addToCart(p, v)} />
+          <ConfirmDialog open={delCartIdx !== null} onCancel={() => setDelCartIdx(null)} message="ต้องการลบสินค้านี้ออกจากตะกร้าใช่หรือไม่?"
+            onConfirm={() => { removeFromCart(delCartIdx); setDelCartIdx(null); }} />
         </div>
       ) : (
         <Card className="p-4">
@@ -1996,10 +2078,11 @@ export default function App() {
   };
 
   const actions = {
-    addProduct: (p) => setData((d) => ({ ...d, products: [...d.products, { variants: [], lots: [], ...p }] })),
+    addProduct: (p) => setData((d) => ({ ...d, products: [...d.products, { variants: [], lots: [], createdAt: new Date().toISOString(), ...p }] })),
     editProduct: (p) => setData((d) => ({ ...d, products: d.products.map((x) => x.id === p.id ? { ...x, ...p } : x) })),
     deleteProduct: (id) => setData((d) => ({ ...d, products: d.products.filter((x) => x.id !== id) })),
     addCategory: (name) => setData((d) => d.categories.includes(name) ? d : { ...d, categories: [...d.categories, name] }),
+    deleteCategory: (name) => setData((d) => ({ ...d, categories: d.categories.filter((c) => c !== name) })),
     addCustomer: (c) => setData((d) => ({ ...d, customers: [...d.customers, c] })),
     editCustomer: (c) => setData((d) => ({ ...d, customers: d.customers.map((x) => x.id === c.id ? { ...x, ...c } : x) })),
     deleteCustomer: (id) => setData((d) => ({ ...d, customers: d.customers.filter((x) => x.id !== id) })),
