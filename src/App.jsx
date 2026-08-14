@@ -65,7 +65,7 @@ const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
 const MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 const addDays = (date, n) => { const d = new Date(date); d.setDate(d.getDate() + n); return d; };
 
-const SITE_PASSWORD = "pp"; // เปลี่ยนเป็นรหัสที่ต้องการ
+const SITE_PASSWORD = "1234"; // เปลี่ยนเป็นรหัสที่ต้องการ
 
 const CHANNELS = [
   { key: "line", label: "LINE", color: "#06C755" },
@@ -1019,7 +1019,7 @@ function Dashboard({ data }) {
     return { rangeStart: s, rangeEnd: e };
   }, [gran, customFrom, customTo]);
 
-  const inRange = useMemo(() => data.orders.filter((o) => { const d = new Date(o.date); return d >= rangeStart && d <= rangeEnd; }), [data.orders, rangeStart, rangeEnd]);
+  const inRange = useMemo(() => data.orders.filter((o) => { const d = new Date(o.date); return d >= rangeStart && d <= rangeEnd && o.status === "closed"; }), [data.orders, rangeStart, rangeEnd]);
 
   const chartData = useMemo(() => {
     const map = new Map();
@@ -1320,6 +1320,7 @@ function OrdersPage({ data, actions, shopInfo }) {
   const [receiptOrder, setReceiptOrder] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
+  const [showClosed, setShowClosed] = useState(false);
 
   const customersById = Object.fromEntries(data.customers.map((c) => [c.id, c]));
   const productsById = Object.fromEntries(data.products.map((p) => [p.id, p]));
@@ -1416,7 +1417,9 @@ function OrdersPage({ data, actions, shopInfo }) {
     else setTab("list");
   };
 
-  const orders = [...data.orders].sort((a, b) => new Date(b.date) - new Date(a.date))
+  const orders = [...data.orders]
+    .filter((o) => showClosed || o.status !== "closed")
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
     .filter((o) => !orderSearch || o.orderNo.toLowerCase().includes(orderSearch.toLowerCase()) || (customersById[o.customerId]?.name || "").toLowerCase().includes(orderSearch.toLowerCase()));
 
   return (
@@ -1508,6 +1511,10 @@ function OrdersPage({ data, actions, shopInfo }) {
         <Card className="p-4">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <SearchBox value={orderSearch} onChange={setOrderSearch} placeholder="ค้นหาเลขออเดอร์หรือลูกค้า..." />
+            <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer" style={{ color: C.sub }}>
+              <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
+              แสดงออเดอร์ที่ปิดรายการแล้วด้วย
+            </label>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1639,8 +1646,8 @@ function FinancePage({ data, actions }) {
     return d;
   }, [range]);
 
-  const salesIncome = data.orders.filter((o) => new Date(o.date) >= cutoff).reduce((s, o) => s + orderTotals(o).total, 0);
-  const cogs = data.orders.filter((o) => new Date(o.date) >= cutoff).reduce((s, o) => s + orderTotals(o).cost, 0);
+  const salesIncome = data.orders.filter((o) => new Date(o.date) >= cutoff && o.status === "closed").reduce((s, o) => s + orderTotals(o).total, 0);
+  const cogs = data.orders.filter((o) => new Date(o.date) >= cutoff && o.status === "closed").reduce((s, o) => s + orderTotals(o).cost, 0);
   const otherEntries = data.financeEntries.filter((f) => new Date(f.date) >= cutoff);
   const otherIncome = otherEntries.filter((f) => f.type === "income").reduce((s, f) => s + f.amount, 0);
   const otherExpense = otherEntries.filter((f) => f.type === "expense").reduce((s, f) => s + f.amount, 0);
@@ -1729,7 +1736,7 @@ function ReportsPage({ data }) {
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
   const customersById = Object.fromEntries(data.customers.map((c) => [c.id, c]));
 
-  const rangeOrders = data.orders.filter((o) => { const d = isoDay(o.date); return d >= from && d <= to; });
+  const rangeOrders = data.orders.filter((o) => { const d = isoDay(o.date); return d >= from && d <= to && o.status === "closed"; });
 
   const bestSellers = useMemo(() => {
     const map = new Map();
