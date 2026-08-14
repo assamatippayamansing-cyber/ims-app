@@ -495,7 +495,7 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
   useEffect(() => { setForm(initial ? { ...blank, ...initial, variants: (initial.variants || []).map((v) => ({ ...v })) } : blank); setAddingCat(false); setNewCat(""); }, [initial, open]);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const addVariant = () => setForm((f) => ({ ...f, variants: [...f.variants, { id: uid(), sku: "", name: "", sellPrice: "" }] }));
+  const addVariant = () => setForm((f) => ({ ...f, variants: [...f.variants, { id: uid(), sku: "", name: "", sellPrice: "", imageUrl: "" }] }));
   const updateVariant = (id, k, v) => setForm((f) => ({ ...f, variants: f.variants.map((x) => x.id === id ? { ...x, [k]: v } : x) }));
   const removeVariant = (id) => setForm((f) => ({ ...f, variants: f.variants.filter((x) => x.id !== id) }));
 
@@ -515,7 +515,7 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
       .filter((v) => v.sku || v.name)
       .map((v) => {
         if (!v.sku || !v.name || v.sellPrice === "") return null;
-        return { id: v.id, sku: v.sku, name: v.name, sellPrice: Number(v.sellPrice) };
+        return { id: v.id, sku: v.sku, name: v.name, sellPrice: Number(v.sellPrice), imageUrl: v.imageUrl || "" };
       });
     if (cleanVariants.includes(null)) { alert("สินค้าย่อยแต่ละรายการต้องกรอก รหัส/ชื่อ/ราคาขาย ให้ครบ"); return; }
     onSave({
@@ -569,11 +569,16 @@ function ProductModal({ open, onClose, initial, onSave, categories, onAddCategor
         ) : (
           <div className="flex flex-col gap-2">
             {form.variants.map((v) => (
-              <div key={v.id} className="grid gap-2 items-center p-2 rounded-xl" style={{ gridTemplateColumns: "1fr 1fr 100px auto", background: C.bg }}>
-                <Input placeholder="รหัสสินค้าย่อย" value={v.sku} onChange={(e) => updateVariant(v.id, "sku", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
-                <Input placeholder="ชื่อ (เช่น ไซส์ M)" value={v.name} onChange={(e) => updateVariant(v.id, "name", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
-                <Input type="number" min="0" placeholder="ราคาขาย" value={v.sellPrice} onChange={(e) => updateVariant(v.id, "sellPrice", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
-                <IconBtn icon={X} tone="danger" title="ลบสินค้าย่อย" onClick={() => removeVariant(v.id)} />
+              <div key={v.id} className="p-2.5 rounded-xl flex flex-col gap-2" style={{ background: C.bg }}>
+                <div className="flex items-center justify-between gap-2">
+                  <ImageField value={v.imageUrl} onChange={(val) => updateVariant(v.id, "imageUrl", val)} />
+                  <IconBtn icon={X} tone="danger" title="ลบสินค้าย่อย" onClick={() => removeVariant(v.id)} />
+                </div>
+                <div className="grid gap-2 items-center" style={{ gridTemplateColumns: "1fr 1fr 100px" }}>
+                  <Input placeholder="รหัสสินค้าย่อย" value={v.sku} onChange={(e) => updateVariant(v.id, "sku", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
+                  <Input placeholder="ชื่อ (เช่น ไซส์ M)" value={v.name} onChange={(e) => updateVariant(v.id, "name", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
+                  <Input type="number" min="0" placeholder="ราคาขาย" value={v.sellPrice} onChange={(e) => updateVariant(v.id, "sellPrice", e.target.value)} style={{ padding: "7px 10px", fontSize: 13 }} />
+                </div>
               </div>
             ))}
           </div>
@@ -1222,6 +1227,7 @@ function ProductsPage({ data, actions }) {
                             {p.variants.map((v) => (
                               <div key={v.id} className="flex items-center justify-between px-3 py-2 text-xs" style={{ borderBottom: `1px solid ${C.border}`, background: C.bg }}>
                                 <div className="flex items-center gap-2">
+                                  <Thumb src={v.imageUrl || p.imageUrl} size={28} />
                                   <span className="mono" style={{ color: C.sub }}>{v.sku}</span>
                                   <span className="font-semibold" style={{ color: C.text }}>{v.name}</span>
                                 </div>
@@ -1285,8 +1291,9 @@ function ProductSearchModal({ open, onClose, products, onPick }) {
                     const vAvail = stockOf(p, v.id);
                     return (
                       <button key={v.id} onClick={() => onPick(p, v)} disabled={vAvail <= 0}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+                        className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
                         style={{ background: C.accentSoft, color: C.accentDark, border: `1px solid ${C.accentSoft}` }}>
+                        <Thumb src={v.imageUrl || p.imageUrl} size={22} />
                         {v.name} · {money(v.sellPrice)} · เหลือ {vAvail}
                       </button>
                     );
@@ -1340,11 +1347,12 @@ function OrdersPage({ data, actions, shopInfo }) {
     const estCost = avgCostOf(p, variantId);
     const name = variant ? `${p.name} — ${variant.name}` : p.name;
     const sku = variant ? variant.sku : p.sku;
+    const imageUrl = variant ? (variant.imageUrl || p.imageUrl) : p.imageUrl;
     if (avail <= 0) return;
     setCart((c) => {
       const existing = c.find((i) => i.productId === p.id && (i.variantId || null) === variantId);
       if (existing) return c.map((i) => i === existing ? { ...i, qty: Math.min(i.qty + 1, avail) } : i);
-      return [...c, { productId: p.id, variantId, sku, name, price, cost: estCost, qty: 1, imageUrl: p.imageUrl, avail }];
+      return [...c, { productId: p.id, variantId, sku, name, price, cost: estCost, qty: 1, imageUrl, avail }];
     });
     actions.notify(`เพิ่ม "${name}" แล้ว`);
   };
@@ -1756,7 +1764,7 @@ function ReportsPage({ data }) {
       if (mainStock > 0 || (p.variants || []).length === 0) rows.push({ sku: p.sku, name: p.name, imageUrl: p.imageUrl, stock: mainStock, value: mainStock * avgCostOf(p, null) });
       (p.variants || []).forEach((v) => {
         const vStock = stockOf(p, v.id);
-        rows.push({ sku: v.sku, name: `${p.name} — ${v.name}`, imageUrl: p.imageUrl, stock: vStock, value: vStock * avgCostOf(p, v.id) });
+        rows.push({ sku: v.sku, name: `${p.name} — ${v.name}`, imageUrl: v.imageUrl || p.imageUrl, stock: vStock, value: vStock * avgCostOf(p, v.id) });
       });
     });
     return rows.sort((a, b) => a.stock - b.stock);
