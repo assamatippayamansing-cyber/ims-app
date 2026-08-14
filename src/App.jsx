@@ -1197,6 +1197,28 @@ function Dashboard({ data }) {
 }
 
 /* ============================== PRODUCTS PAGE ============================== */
+/* ============================== PAGINATION ============================== */
+function Pagination({ page, totalPages, onChange }) {
+  if (totalPages <= 1) return null;
+  let display = Array.from({ length: totalPages }, (_, i) => i + 1);
+  if (totalPages > 7) {
+    const keep = new Set([1, totalPages, page, page - 1, page + 1, page - 2, page + 2].filter((p) => p >= 1 && p <= totalPages));
+    display = Array.from(keep).sort((a, b) => a - b);
+  }
+  return (
+    <div className="flex items-center justify-center flex-wrap gap-1.5 mt-4">
+      <button disabled={page <= 1} onClick={() => onChange(page - 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-30" style={{ border: `1px solid ${C.border}`, background: "#fff", color: C.sub }}>ก่อนหน้า</button>
+      {display.map((p, i) => (
+        <React.Fragment key={p}>
+          {i > 0 && p - display[i - 1] > 1 && <span className="px-1 text-xs" style={{ color: C.faint }}>...</span>}
+          <button onClick={() => onChange(p)} className="w-8 h-8 rounded-lg text-xs font-semibold" style={{ background: p === page ? C.accent : "#fff", color: p === page ? "#fff" : C.sub, border: `1px solid ${p === page ? C.accent : C.border}` }}>{p}</button>
+        </React.Fragment>
+      ))}
+      <button disabled={page >= totalPages} onClick={() => onChange(page + 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-30" style={{ border: `1px solid ${C.border}`, background: "#fff", color: C.sub }}>ถัดไป</button>
+    </div>
+  );
+}
+
 function ProductsPage({ data, actions }) {
   const [q, setQ] = useState("");
   const [modal, setModal] = useState(null);
@@ -1204,6 +1226,8 @@ function ProductsPage({ data, actions }) {
   const [stockTarget, setStockTarget] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [sortBy, setSortBy] = useState("default");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
   const [catModalOpen, setCatModalOpen] = useState(false);
 
   const toggleExpand = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -1229,6 +1253,10 @@ function ProductsPage({ data, actions }) {
     else if (sortBy === "bestseller") rows = [...rows].sort((a, b) => bySold(b) - bySold(a));
     return rows;
   }, [data.products, q, sortBy, soldQtyByProduct]);
+
+  useEffect(() => { setPage(1); }, [q, sortBy]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pagedProducts = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
     <div>
@@ -1264,7 +1292,7 @@ function ProductsPage({ data, actions }) {
               <th className="text-right py-2 px-2 text-xs font-semibold" style={{ color: C.sub }}>จัดการ</th>
             </tr></thead>
             <tbody>
-              {filtered.map((p) => {
+              {pagedProducts.map((p) => {
                 const hasVariants = (p.variants || []).length > 0;
                 const isOpen = expanded.has(p.id);
                 return (
@@ -1324,6 +1352,7 @@ function ProductsPage({ data, actions }) {
             </tbody>
           </table>
           {filtered.length === 0 && <EmptyState text="ไม่พบข้อมูล" />}
+          <Pagination page={page} totalPages={totalPages} onChange={setPage} />
         </div>
       </Card>
 
