@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Package, ShoppingCart, Users, Wallet,
   FileBarChart, Plus, Search, Pencil, Trash2, X, ChevronDown, ChevronRight,
   TrendingUp, TrendingDown, Menu, Truck, Printer, FileSpreadsheet,
-  RotateCcw, Minus, CircleUser, ImageIcon, ArrowLeftRight, Layers, Receipt,
+  RotateCcw, Minus, CircleUser, ImageIcon, ArrowLeftRight, Layers, Receipt, Download, Upload,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -949,7 +949,8 @@ const NAV = [
   { key: "reports", label: "รายงาน", icon: FileBarChart },
 ];
 
-function Sidebar({ page, setPage, open, setOpen, onReset, onOpenSettings }) {
+function Sidebar({ page, setPage, open, setOpen, onOpenSettings, onExportBackup, onImportBackup }) {
+  const importRef = useRef(null);
   return (
     <>
       {open && <div className="fixed inset-0 z-30 md:hidden" style={{ background: "rgba(0,0,0,0.4)" }} onClick={() => setOpen(false)} />}
@@ -977,9 +978,13 @@ function Sidebar({ page, setPage, open, setOpen, onReset, onOpenSettings }) {
           <button onClick={onOpenSettings} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#B8C4E0" }}>
             <Receipt size={16} /> ข้อมูลร้านค้า
           </button>
-          <button onClick={onReset} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#7C8CB0" }}>
-            <RotateCcw size={16} /> ล้างข้อมูลทั้งหมด
+          <button onClick={onExportBackup} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#B8C4E0" }}>
+            <Download size={16} /> สำรองข้อมูล
           </button>
+          <button onClick={() => importRef.current && importRef.current.click()} className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#B8C4E0" }}>
+            <Upload size={16} /> กู้คืนจากไฟล์สำรอง
+          </button>
+          <input ref={importRef} type="file" accept="application/json" className="hidden" onChange={(e) => { onImportBackup(e.target.files && e.target.files[0]); e.target.value = ""; }} />
         </div>
       </aside>
     </>
@@ -1436,6 +1441,7 @@ function OrdersPage({ data, actions, shopInfo }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
   const [delCartIdx, setDelCartIdx] = useState(null);
+  const [delOrder, setDelOrder] = useState(null);
   const [showClosed, setShowClosed] = useState(false);
 
   const customersById = Object.fromEntries(data.customers.map((c) => [c.id, c]));
@@ -1676,6 +1682,7 @@ function OrdersPage({ data, actions, shopInfo }) {
             {detail.status === "pending" && <Btn onClick={() => { actions.updateOrderStatus(detail.id, "closed"); actions.notify("ปิดรายการเรียบร้อยแล้ว"); setDetail({ ...detail, status: "closed" }); }}>ปิดรายการ</Btn>}
             <Btn variant="ghost" icon={Pencil} onClick={() => startEditOrder(detail)}>แก้ไขออเดอร์</Btn>
             <Btn variant="subtle" icon={Receipt} onClick={() => setReceiptOrder(detail)}>ออกใบเสร็จ/ใบเสนอราคา (A4)</Btn>
+            <Btn variant="danger" icon={Trash2} onClick={() => setDelOrder(detail)}>ลบออเดอร์</Btn>
           </>
         )}>
         {detail && (() => {
@@ -1711,6 +1718,9 @@ function OrdersPage({ data, actions, shopInfo }) {
       </Modal>
 
       <ReceiptView open={!!receiptOrder} onClose={() => setReceiptOrder(null)} order={receiptOrder} customer={receiptOrder ? customersById[receiptOrder.customerId] : null} shopInfo={shopInfo} />
+      <ConfirmDialog open={!!delOrder} onCancel={() => setDelOrder(null)}
+        message={`ต้องการลบออเดอร์ "${delOrder?.orderNo || ""}" ใช่หรือไม่? สต๊อกที่ตัดไปจะถูกคืนกลับเข้าระบบอัตโนมัติ (ไม่สามารถกู้คืนออเดอร์นี้ได้)`}
+        onConfirm={() => { actions.deleteOrder(delOrder); actions.notify("ลบออเดอร์แล้ว"); setDelOrder(null); setDetail(null); }} />
     </div>
   );
 }
@@ -2058,6 +2068,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const saveTimer = useRef(null);
   const [toastMsg, setToastMsg] = useState("");
   const toastTimer = useRef(null);
@@ -2075,21 +2086,33 @@ export default function App() {
     else setPwError(true);
   };
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/data");
-        const parsed = await res.json();
-        if (parsed) {
-          if (!parsed.categories) parsed.categories = [...DEFAULT_CATEGORIES];
-          if (!parsed.shopInfo) parsed.shopInfo = { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" };
-          parsed.products = (parsed.products || []).map(migrateProduct);
-          setData(parsed);
-        } else setData(buildSeedData());
-      } catch { setData(buildSeedData()); }
-      finally { setLoading(false); }
-    })();
-  }, []);
+  const loadData = async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const res = await fetch("/api/data");
+      if (!res.ok) throw new Error("bad response: " + res.status);
+      const text = await res.text();
+      const parsed = text ? JSON.parse(text) : null;
+      if (parsed) {
+        if (!parsed.categories) parsed.categories = [...DEFAULT_CATEGORIES];
+        if (!parsed.shopInfo) parsed.shopInfo = { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" };
+        parsed.products = (parsed.products || []).map(migrateProduct);
+        setData(parsed);
+      } else {
+        // Genuinely first-time use: nothing saved yet in KV, safe to start empty.
+        setData(buildSeedData());
+      }
+    } catch {
+      // Fetch/parse failed — do NOT assume "no data". Keep data null so nothing gets
+      // auto-saved over whatever is actually stored, and show a retry screen instead.
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []);
 
   useEffect(() => {
     if (!data) return;
@@ -2097,9 +2120,45 @@ export default function App() {
     saveTimer.current = setTimeout(async () => {
       try {
         await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-      } catch {}
+      } catch {
+        notify("บันทึกข้อมูลไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต");
+      }
     }, 400);
   }, [data]);
+
+  const exportBackup = () => {
+    if (!data) return;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `stockflow-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    notify("ดาวน์โหลดไฟล์สำรองแล้ว");
+  };
+
+  const importBackup = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.products)) throw new Error("invalid");
+        if (!confirm("การกู้คืนจะแทนที่ข้อมูลปัจจุบันทั้งหมดด้วยข้อมูลในไฟล์สำรอง ต้องการดำเนินการต่อหรือไม่?")) return;
+        if (!parsed.categories) parsed.categories = [...DEFAULT_CATEGORIES];
+        if (!parsed.shopInfo) parsed.shopInfo = { name: "ชื่อร้านค้าของคุณ", address: "", taxId: "", phone: "", email: "" };
+        parsed.products = parsed.products.map(migrateProduct);
+        setData(parsed);
+        notify("กู้คืนข้อมูลจากไฟล์สำรองแล้ว");
+      } catch {
+        alert("ไฟล์นี้ไม่ใช่ไฟล์สำรองที่ถูกต้อง");
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const resetData = async () => {
     if (!confirm("ต้องการล้างข้อมูลทั้งหมดหรือไม่? (ไม่สามารถกู้คืนได้)")) return;
@@ -2178,6 +2237,23 @@ export default function App() {
       return { ...d, products, stockMoves: [...d.stockMoves, ...moves] };
     }),
 
+    // Permanently removes an order and returns its items back into stock as fresh lots
+    deleteOrder: (order) => setData((d) => {
+      const moves = [];
+      const products = d.products.map((p) => {
+        const items = order.items.filter((i) => i.productId === p.id);
+        if (items.length === 0) return p;
+        const newLots = [...(p.lots || [])];
+        items.forEach((it) => {
+          newLots.push({ id: uid(), variantId: it.variantId || null, qty: it.qty, costPrice: it.cost, supplierId: null, date: order.date, note: `คืนสต๊อกจากการลบออเดอร์ ${order.orderNo}` });
+          moves.push({ id: uid(), productId: p.id, variantId: it.variantId || null, type: "in", qty: it.qty, costPrice: it.cost, supplierId: null, date: new Date().toISOString(), note: `คืนสต๊อกจากการลบออเดอร์ ${order.orderNo}`, refOrderId: order.id });
+        });
+        return { ...p, lots: newLots };
+      });
+      const orders = d.orders.filter((o) => o.id !== order.id);
+      return { ...d, products, orders, stockMoves: [...d.stockMoves, ...moves] };
+    }),
+
     // Re-deducts an order's original items (used when the edit is cancelled, to restore the pre-edit state)
     restoreOrderStock: (order) => setData((d) => {
       const moves = [];
@@ -2235,6 +2311,19 @@ export default function App() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="ims min-h-screen flex items-center justify-center p-4" style={{ background: C.bg }}>
+        <GlobalStyle />
+        <div className="text-center max-w-xs">
+          <div className="text-sm font-semibold mb-1" style={{ color: C.danger }}>โหลดข้อมูลไม่สำเร็จ</div>
+          <div className="text-xs mb-4" style={{ color: C.sub }}>ข้อมูลของคุณยังปลอดภัย ระบบยังไม่บันทึกอะไรทับ — อาจเป็นเพราะอินเทอร์เน็ตขัดข้องชั่วคราว ลองใหม่อีกครั้ง</div>
+          <Btn onClick={loadData}>ลองโหลดใหม่</Btn>
+        </div>
+      </div>
+    );
+  }
+
   if (loading || !data) {
     return (
       <div className="ims min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
@@ -2249,7 +2338,7 @@ export default function App() {
   return (
     <div className="ims min-h-screen flex" style={{ background: C.bg }}>
       <GlobalStyle />
-      <Sidebar page={page} setPage={setPage} open={navOpen} setOpen={setNavOpen} onReset={resetData} onOpenSettings={() => setSettingsOpen(true)} />
+      <Sidebar page={page} setPage={setPage} open={navOpen} setOpen={setNavOpen} onOpenSettings={() => setSettingsOpen(true)} onExportBackup={exportBackup} onImportBackup={importBackup} />
       <div className="flex-1 min-w-0 flex flex-col">
         <Topbar title={pageTitles[page]} onMenu={() => setNavOpen(true)} />
         <main className="flex-1 p-4 md:p-7">
