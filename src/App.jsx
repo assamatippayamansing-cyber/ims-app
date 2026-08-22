@@ -2126,13 +2126,29 @@ export default function App() {
     }, 400);
   }, [data]);
 
-  const exportBackup = () => {
+  const exportBackup = async () => {
     if (!data) return;
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const filename = `stockflow-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const jsonStr = JSON.stringify(data, null, 2);
+
+    // On iPad/iPhone, use the native Share sheet (gives a proper "Save to Files" option).
+    try {
+      const file = new File([jsonStr], filename, { type: "application/json" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        notify("แชร์ไฟล์สำรองแล้ว");
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // user cancelled the share sheet
+      // otherwise fall through to the direct-download method below
+    }
+
+    const blob = new Blob([jsonStr], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `stockflow-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
